@@ -62,11 +62,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # No `registry-url`. It exists to wire up token auth: setup-node writes an .npmrc containing
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and exports NODE_AUTH_TOKEN JOB-WIDE
+      # with its literal placeholder, `XXXXX-XXXXX-XXXXX-XXXXX`. With trusted publishing there is no
+      # token to put there, so all it would do is offer npm a bogus credential to try before OIDC.
+      # registry.npmjs.org is npm's default anyway, so the option buys nothing and costs that.
+      #
+      # The v0.1.0 run did not catch this: npm was skipped because 0.1.0 was already published by
+      # hand, so the next release is the first one that actually authenticates to npm.
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       # Resolved BEFORE the build, so the version can be stamped into the assembly. It used to run
       # after, which meant `-p:PackageVersion` on a `--no-build` pack set the nuspec and nothing
