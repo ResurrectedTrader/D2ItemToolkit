@@ -1,0 +1,13 @@
+# The LAST matching pattern wins, so the general rule goes first and the exemptions after it.
+* text=auto
+
+# The whole project's correctness is byte-identity with the game, and `data/` is embedded into both
+# published packages verbatim. The tables are CRLF, tab-separated, and the .tbl/.D2 files are
+# binary. Without `-text` git is free to apply eol conversion on checkout or on the next `git add`,
+# which would silently change the embedded bytes — and a table that round-trips through LF is not
+# the table the game shipped. `-diff` keeps a one-column change out of a 500-column diff.
+data/** -text -diff
+
+# Generated and compared byte-for-byte by the differential. Normalising line endings here would
+# make every regenerated file look changed on the other platform.
+tests/corpus/*.json -text -diff

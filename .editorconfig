@@ -1,0 +1,41 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+
+[*.cs]
+indent_size = 4
+
+# dotnet format indents a braced `case` body one level deeper than the label by default, which
+# re-indents every traced switch arm in PropertyApplier and RecordSections for no gain. The braces
+# are there to scope locals per arm, not to add a level.
+csharp_indent_case_contents_when_block = false
+
+# ReSharper defaults local constants to camelCase. Everything here — including the sentinels and
+# padding constants inside test helpers — is PascalCase, matching .NET's own convention for
+# constants and the fields alongside them.
+dotnet_naming_rule.local_constants_are_pascal_case.symbols = local_constants
+dotnet_naming_rule.local_constants_are_pascal_case.style = pascal_case
+dotnet_naming_rule.local_constants_are_pascal_case.severity = suggestion
+
+dotnet_naming_symbols.local_constants.applicable_kinds = local
+dotnet_naming_symbols.local_constants.required_modifiers = const
+
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+[*.{ts,mts,mjs,js,json,yml,yaml}]
+indent_size = 2
+
+[*.{csproj,props,targets,DotSettings}]
+indent_size = 2
+
+# The game tables are CRLF and are embedded verbatim; the [*] rules above would have an editor
+# normalise them on save, which changes the bytes the packages ship. `.gitattributes` stops git
+# doing it — this stops the editor.
+[data/**]
+end_of_line = crlf
+insert_final_newline = false
+trim_trailing_whitespace = false

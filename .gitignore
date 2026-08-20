@@ -1,0 +1,56 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+TestResults/
+coverage*.xml
+coverage*.json
+*.received.*
+
+# Node (for the TypeScript implementation)
+node_modules/
+dist/
+
+# Generated from data/ by `npm run generate:data`, which the `prepare` script runs on install and
+# before packing. Checking it in would duplicate 2.6 MB of tables that already live in data/.
+src/D2ItemToolkit.Ts/src/Data/EmbeddedDataBlob.ts
+*.tsbuildinfo
+
+# Written by tests/corpus/adversarial.compare.test.ts on every run so a failing run is
+# inspectable. A run artifact, not an input.
+tests/corpus/adversarial-mismatches.json
+
+npm-debug.log*
+.pnpm-debug.log*
+
+# IDE
+.vs/
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Working notes: the traced spec, the audit log, the capture/producer sheets. These are for our own
+# consumption — they cite disassembly addresses and record what was refuted along the way, which is
+# how the project is worked on, not how the library is used. The published README is the user-facing
+# documentation.
+docs/
+
+# NuGet output
+*.nupkg
+*.snupkg
+artifacts/
+
+# Copied in from the repository root by the TS package's prepack so npm can show them on the
+# package page. The root copies are the originals.
+src/D2ItemToolkit.Ts/README.md
+src/D2ItemToolkit.Ts/LICENSE
+
+# The publish/pack workflows stage both packages here.
+nupkg/
+
+# `npm run coverage` writes here.
+coverage/

@@ -1,0 +1,25 @@
+{
+  "name": "d2itemtoolkit-repo",
+  "private": true,
+  "description": "Workspace root. The TypeScript implementation lives in src/D2ItemToolkit.Ts.",
+  "workspaces": [
+    "src/D2ItemToolkit.Ts"
+  ],
+  "scripts": {
+    "test": "npm --workspace d2itemtoolkit run test",
+    "test:adversarial": "npm --workspace d2itemtoolkit run test:adversarial",
+    "generate:adversarial": "node tests/corpus/generate-adversarial.mjs",
+    "typecheck": "npm --workspace d2itemtoolkit run typecheck",
+    "build": "npm --workspace d2itemtoolkit run build",
+    "coverage": "npm --workspace d2itemtoolkit run coverage",
+    "lint": "eslint src/D2ItemToolkit.Ts tests --max-warnings 0",
+    "format": "prettier --write \"src/D2ItemToolkit.Ts/src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/D2ItemToolkit.Ts/src/**/*.ts\" \"tests/**/*.ts\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.0",
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.65.0"
+  }
+}

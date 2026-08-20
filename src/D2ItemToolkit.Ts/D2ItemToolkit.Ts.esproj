@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.VisualStudio.JavaScript.Sdk/1.0.784122">
+  <!--
+    Navigation only. The TypeScript implementation is built and tested by npm, never by MSBuild:
+    `npm run build`, `npm test`, `npm run lint`. This project exists so the package shows up in
+    Solution Explorer beside the C# one.
+
+    The SDK version matches the one D2BotNG pins, because that is the version actually installed
+    with the Visual Studio JavaScript workload here — a newer one fails to restore with MSB4236.
+
+    The solution gives this project an ActiveCfg but deliberately NO Build.0, so `dotnet build`
+    on the solution does not try to drive npm. CI builds the .csproj files directly for the same
+    reason: this Visual-Studio-only project type must not be able to break a bare runner.
+  -->
+  <PropertyGroup>
+    <BuildCommand>npm run build</BuildCommand>
+    <TestCommand>npm test</TestCommand>
+    <JavaScriptTestFramework>Vitest</JavaScriptTestFramework>
+    <ShouldRunBuildScript>false</ShouldRunBuildScript>
+    <ShouldRunNpmInstall>false</ShouldRunNpmInstall>
+    <BuildOutputFolder>$(MSBuildProjectDirectory)\dist\</BuildOutputFolder>
+  </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="src\" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    // No maps in the published build. They used to name `../src/*.ts`, which `files` never ships,
+    // so all 39 of them were unresolvable — 293 kB of dead weight. Inlining the sources instead
+    // is worse: EmbeddedDataBlob.ts is 713 kB of base64, so its map alone grew to 747 kB.
+    // `tsconfig.json` keeps maps on for local builds and tests, where the sources are present.
+    "sourceMap": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*.ts"],
+  // The differential harness deliberately reaches past the facade to compare intermediate layers
+  // against the C# reference. It is not reachable through the `exports` map, so shipping it was
+  // dead weight that also published the one file bypassing the encapsulation index.ts maintains.
+  // The tests import it from `src/`, so they are unaffected.
+  "exclude": ["src/Differential.ts"]
+}

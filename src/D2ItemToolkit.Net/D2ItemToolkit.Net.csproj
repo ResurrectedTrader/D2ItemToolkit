@@ -1,0 +1,94 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>D2ItemToolkit</AssemblyName>
+    <RootNamespace>D2ItemToolkit</RootNamespace>
+    <DebugType>portable</DebugType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>D2ItemToolkit</PackageId>
+    <!--
+      No <Version> on purpose. The publish workflow derives it from the latest git tag and passes
+      -p:PackageVersion, the same way D2SSharp does, so the version lives in one place instead of
+      being a number in here that someone has to remember to bump. A local `dotnet pack` produces
+      1.0.0 and is only ever for inspecting the package.
+    -->
+    <Authors>ResurrectedTrader</Authors>
+    <Description>Diablo II 1.14d's item description engine, reimplemented from the disassembly. Give it a captured unit and it renders the exact tooltip the game would draw, byte for byte, including the game's own quirks. The shipped tables are embedded, so it works with no game install.</Description>
+    <PackageTags>diablo2;diablo-ii;d2;tooltip;item;reverse-engineering;game;modding</PackageTags>
+    <!--
+      The FILE, not the `MIT` expression. An expression makes nuget.org display "MIT" for the whole
+      artifact and emit licenseUrl=licenses.nuget.org/MIT, which leaves the packaged LICENSE inert —
+      and this package embeds Blizzard's shipped data tables, which the MIT grant does not cover.
+      The file carries the grant and that carve-out together, so what nuget shows is accurate.
+    -->
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/ResurrectedTrader/D2ItemToolkit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ResurrectedTrader/D2ItemToolkit.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <!-- A source-linked symbol package, so a consumer can step into the traced code. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+    <!--
+      Deterministic alone does NOT normalise source paths — it only fixes the build's own
+      non-determinism. Without this, a locally built package embeds the absolute path of whoever
+      built it in the assembly, and with EmbedUntrackedSources that reaches the symbol package
+      too: verified by grepping a local .nupkg, which contained the checkout path and the GitHub
+      account name from it. GitHub Actions sets CI=true, so a release built there is normalised
+      to /_/; leaving it off locally keeps local debugging able to find the sources.
+    -->
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <!-- Ship the XML doc file for IntelliSense, but do not demand a comment on every public
+         member: the types that mirror the game are documented where the behaviour is non-obvious,
+         which is the house rule, and CS1591 would fight it. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!--
+    The game tables live at the repository root, not under this project: they are the shared
+    input for every language implementation, so a future TypeScript port embeds the same bytes.
+
+    MSBuild does NOT notice a CHANGED embedded resource when the glob and project file are
+    unchanged. Re-extracting data means wiping obj/ and bin/ before rebuilding, or the stale
+    bytes are silently reused.
+  -->
+  <!--
+    Visible=false keeps these out of Solution Explorer. They are still embedded — the metadata
+    only controls display. Without it every one of the 32 tables is listed as a project item,
+    because an explicit Include makes a file a project item wherever it lives on disk, and the
+    tree then reads as though the game data were part of this project rather than shared input
+    sitting at the repository root.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\data\excel\*.txt" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.excel.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\locale\eng\*.tbl" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.locale.eng.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\global\*.D2" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.global.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+</Project>

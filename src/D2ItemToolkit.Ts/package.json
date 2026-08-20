@@ -1,0 +1,69 @@
+{
+  "name": "d2itemtoolkit",
+  "version": "0.0.0",
+  "description": "Diablo II 1.14d item description engine, reimplemented from the disassembly. Renders the exact tooltip the game would draw, with the shipped tables embedded so it works with no game install.",
+  "keywords": [
+    "diablo2",
+    "diablo-ii",
+    "d2",
+    "tooltip",
+    "item",
+    "reverse-engineering",
+    "game",
+    "modding"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Resurrected Trader <admin@resurrected.trade>",
+  "homepage": "https://github.com/ResurrectedTrader/D2ItemToolkit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ResurrectedTrader/D2ItemToolkit.git",
+    "directory": "src/D2ItemToolkit.Ts"
+  },
+  "bugs": {
+    "url": "https://github.com/ResurrectedTrader/D2ItemToolkit/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "type": "module",
+  "browser": {
+    "./dist/Data/FileSystem.js": "./dist/Data/FileSystem.browser.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate:data": "node scripts/generate-data.mjs",
+    "prepare": "node scripts/generate-data.mjs",
+    "prepublishOnly": "node scripts/check-publish-version.mjs",
+    "prepack": "node scripts/copy-package-files.mjs && npm run generate:data && npm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:adversarial": "vitest run --config ../../tests/corpus/adversarial.vitest.config.ts",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
+}

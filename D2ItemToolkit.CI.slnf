@@ -1,0 +1,13 @@
+{
+  "solution": {
+    "path": "D2ItemToolkit.sln",
+    "projects": [
+      "src\\D2ItemToolkit.Net\\D2ItemToolkit.Net.csproj",
+      "tests\\D2ItemToolkit.Net.Tests\\D2ItemToolkit.Net.Tests.csproj",
+      "tools\\Corpus\\Corpus.csproj",
+      "tools\\DataSmoke\\DataSmoke.csproj",
+      "tools\\RecordSmoke\\RecordSmoke.csproj",
+      "tools\\Reference\\Reference.csproj"
+    ]
+  }
+}

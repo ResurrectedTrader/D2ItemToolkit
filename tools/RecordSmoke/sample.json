@@ -1,0 +1,64 @@
+{
+  "unitType": 4,
+  "classId": 442,
+  "quality": 5,
+  "itemFlags": 16,
+  "fileIndex": 0,
+  "statsLists": [
+    {
+      "stateNo": 0,
+      "flags": 2147483648,
+      "stats": [
+        { "id": 31, "value": 445 },
+        { "id": 72, "value": 60 },
+        { "id": 73, "value": 60 },
+        { "id": 194, "value": 2 }
+      ]
+    },
+    {
+      "stateNo": 0,
+      "flags": 64,
+      "stats": [
+        { "id": 16, "value": 180 },
+        { "id": 39, "value": 40 }
+      ]
+    },
+    {
+      "stateNo": 165,
+      "flags": 64,
+      "stats": [ { "id": 0, "value": 20 } ]
+    },
+    {
+      "stateNo": 166,
+      "flags": 8256,
+      "stats": [ { "id": 41, "value": 15 } ]
+    }
+  ],
+  "sockets": [
+    {
+      "unitType": 4,
+      "classId": 620,
+      "statsLists": [
+        {
+          "stateNo": 0,
+          "flags": 64,
+          "stats": [
+            { "id": 17, "value": 15 },
+            { "id": 97, "layer": 2, "value": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "unitType": 4,
+      "classId": 604,
+      "statsLists": [
+        {
+          "stateNo": 0,
+          "flags": 64,
+          "stats": [ { "id": 39, "value": 38 } ]
+        }
+      ]
+    }
+  ]
+}

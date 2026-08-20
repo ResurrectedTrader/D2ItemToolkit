@@ -1,0 +1,303 @@
+name: PR Checks
+
+# One job per concern, so a red X names what broke instead of "CI failed". Change detection skips
+# the half that cannot be affected: the two implementations share only `data/`, and a change there
+# has to run both.
+#
+# Every C# job targets D2ItemToolkit.CI.slnf rather than the .sln. The solution carries an .esproj
+# for the TypeScript project whose SDK ships with Visual Studio and cannot be restored on a bare
+# runner, but the solution is also where the .DotSettings suppressions and the cross-project usage
+# data live — inspecting a bare .csproj reports 54 findings that the solution correctly resolves.
+# The filter gives us both: no .esproj, full solution context.
+
+# `push: main` plus `pull_request`, rather than `branches-ignore: [main]` plus `pull_request`. The
+# latter is D2SSharp's shape, but there publishing runs on every main push and doubles as main's
+# check; here publishing is tag-only, so main would have had no checks at all. This way each commit
+# is checked exactly once — on its PR, then on main — instead of twice for branches that have a PR
+# open.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ['**']
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      cs: ${{ steps.filter.outputs.cs }}
+      ts: ${{ steps.filter.outputs.ts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            cs:
+              - 'src/D2ItemToolkit.Net/**'
+              - 'tests/D2ItemToolkit.Net.Tests/**'
+              - 'tools/**'
+              - 'data/**'
+              - '*.sln'
+              - '*.slnf'
+              - '*.DotSettings'
+              - '.editorconfig'
+              - '.config/dotnet-tools.json'
+              - '.github/workflows/pr.yml'
+            ts:
+              - 'src/D2ItemToolkit.Ts/**'
+              - 'tests/D2ItemToolkit.Ts.Tests/**'
+              - 'tests/corpus/**'
+              - 'data/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'eslint.config.mjs'
+              - '.prettierrc.json'
+              - '.github/workflows/pr.yml'
+
+  build-cs:
+    name: Build C#
+    needs: changes
+    if: needs.changes.outputs.cs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build D2ItemToolkit.CI.slnf -c Release
+
+  test-cs:
+    name: Test C#
+    needs: changes
+    if: needs.changes.outputs.cs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test
+        run: >
+          dotnet test D2ItemToolkit.CI.slnf -c Release
+          --logger "trx;LogFileName=results.trx"
+          --collect:"XPlat Code Coverage"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dotnet-test-results
+          path: |
+            **/TestResults/**/*.trx
+            **/TestResults/**/coverage.cobertura.xml
+          if-no-files-found: ignore
+
+  format-cs:
+    name: Format C#
+    needs: changes
+    if: needs.changes.outputs.cs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Check formatting
+        run: dotnet format D2ItemToolkit.CI.slnf --verify-no-changes --verbosity diagnostic
+
+  lint-cs:
+    name: Lint C#
+    needs: changes
+    if: needs.changes.outputs.cs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore tools
+        run: dotnet tool restore
+      - name: Run InspectCode
+        run: >
+          dotnet jb inspectcode D2ItemToolkit.CI.slnf
+          --output=inspect.sarif --format=Sarif --severity=WARNING
+      - name: Check for issues
+        run: |
+          count=$(python3 -c "
+          import json
+          with open('inspect.sarif') as f:
+              sarif = json.load(f)
+          print(sum(len(run.get('results', [])) for run in sarif.get('runs', [])))
+          ")
+          echo "Found $count issue(s)"
+          if [ "$count" -gt 0 ]; then
+            python3 -c "
+          import json
+          with open('inspect.sarif') as f:
+              sarif = json.load(f)
+          for run in sarif.get('runs', []):
+              for r in run.get('results', []):
+                  loc = r.get('locations', [{}])[0].get('physicalLocation', {})
+                  path = loc.get('artifactLocation', {}).get('uri', '?')
+                  line = loc.get('region', {}).get('startLine', '?')
+                  print(f\"::error file={path},line={line}::{r.get('ruleId')}: {r.get('message', {}).get('text', '')}\")
+          "
+            exit 1
+          fi
+
+  build-ts:
+    name: Build TS
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      # `npm ci` runs the package's `prepare`, which generates EmbeddedDataBlob.ts from data/. It
+      # is gitignored, so nothing below would compile without it.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  test-ts:
+    name: Test TS
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  format-ts:
+    name: Format TS
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+
+  lint-ts:
+    name: Lint TS
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      # Separate gate from format:check on purpose — `lint` does not check formatting and
+      # `format:check` does not lint, so a change can pass one and fail the other.
+      - run: npm run lint
+
+  differential:
+    name: Differential
+    needs: [changes, test-cs, test-ts]
+    # Runs whenever either side changed, provided the side that ran passed. This is the only thing
+    # holding the two implementations together, so it must not be skipped just because one half of
+    # the repository was untouched.
+    if: >
+      always()
+      && (needs.changes.outputs.cs == 'true' || needs.changes.outputs.ts == 'true')
+      && (needs.test-cs.result == 'success' || needs.test-cs.result == 'skipped')
+      && (needs.test-ts.result == 'success' || needs.test-ts.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      # Regenerate rather than trust the committed copies: a C# change that moves the output would
+      # otherwise pass against a stale expected.json.
+      - name: Regenerate the corpus and the C# reference
+        run: |
+          dotnet run --project tools/Corpus    -c Release -- tests/corpus/corpus.json
+          dotnet run --project tools/Reference -c Release -- tests/corpus/corpus.json tests/corpus/expected.json
+
+      - name: Fail if the committed reference is stale
+        run: git diff --exit-code -- tests/corpus/
+
+      - run: npm ci
+      - name: Compare implementations
+        run: npm test -- Differential
+
+  smoke:
+    name: Smoke
+    needs: [changes, build-cs]
+    if: needs.changes.outputs.cs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      # The tools exercise the public entry points a caller actually uses, over the real embedded
+      # tables — a change that breaks reading them fails here rather than in a consumer.
+      - name: Record reconstruction
+        run: dotnet run --project tools/RecordSmoke -c Release
+      - name: Table loading
+        run: dotnet run --project tools/DataSmoke -c Release
+
+  pack:
+    name: Pack
+    needs: [changes, test-cs, test-ts]
+    if: >
+      always()
+      && (needs.test-cs.result == 'success' || needs.test-cs.result == 'skipped')
+      && (needs.test-ts.result == 'success' || needs.test-ts.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      # Proves the release path still works before it is needed, and uploads both artifacts so a
+      # reviewer can install them. Publishing itself is publish.yml's job.
+      - name: Pack both packages
+        run: |
+          mkdir -p ./nupkg
+          dotnet pack src/D2ItemToolkit.Net/D2ItemToolkit.Net.csproj -c Release -o ./nupkg
+          npm --workspace d2itemtoolkit pack --pack-destination ./nupkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ./nupkg/*

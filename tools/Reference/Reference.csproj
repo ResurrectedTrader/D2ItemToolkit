@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Not a package. Without this, `dotnet pack` on the solution filter mints a publishable
+         id for this tool, and the publish step globs *.nupkg. -->
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Reference</AssemblyName>
+    <RootNamespace>D2ItemToolkit.Tools</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/D2ItemToolkit.Net/D2ItemToolkit.Net.csproj" />
+  </ItemGroup>
+</Project>

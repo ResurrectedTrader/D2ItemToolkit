@@ -1,0 +1,212 @@
+name: Publish
+
+# The version is derived from the git tag rather than stored in a project file, so there is one
+# source of truth and nothing to forget to bump. A tag push publishes exactly that tag; the manual
+# trigger bumps the newest one and creates the tag afterwards.
+#
+# Both packages publish from the same job on the same version. They are one library with two front
+# ends, and a consumer comparing C# against TypeScript at "the same version" has to be comparing
+# engines that actually agree — so they ship together or not at all.
+
+# NOT on push to main. That is D2SSharp's trigger, and it was a near miss here: two pushes ran this
+# workflow all the way to `Push to NuGet` and were stopped only by NUGET_API_KEY being unset. With
+# the secret present, a README typo would have minted a permanent 0.0.1 on two registries. Publish
+# is now deliberate: push a tag, or run it by hand.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+permissions:
+  contents: write
+
+  # Trusted publishing, on BOTH registries. GitHub mints a short-lived OIDC token, the registry
+  # validates it against a policy naming this repo and THIS WORKFLOW FILE, and hands back a
+  # credential that expires in an hour — so there is no long-lived key to leak or rotate, and this
+  # workflow reads no secrets at all.
+  #
+  # Both policies name the workflow file as `publish.yml` — the file name alone, not the path. Two
+  # consequences worth knowing before editing: renaming this file breaks publishing until both
+  # policies are updated, and adding an `environment:` to the job below breaks it unless the
+  # policies name that environment too.
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: the version comes from tags, and SourceLink needs the commit
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      # Resolved BEFORE the build, so the version can be stamped into the assembly. It used to run
+      # after, which meant `-p:PackageVersion` on a `--no-build` pack set the nuspec and nothing
+      # else: every release would have shipped a DLL reporting 1.0.0.0, indistinguishable between
+      # versions to a consumer inspecting it or to assembly binding.
+      #
+      # Two ways in, and the version comes from a different place in each. A tag push publishes
+      # exactly that tag — bumping past it would publish 0.1.1 for a v0.1.0 tag. A manual run has no
+      # tag yet, so it bumps the newest one and creates the tag afterwards.
+      - name: Resolve the version
+        id: version
+        env:
+          BUMP_TYPE: ${{ inputs.version_bump }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "tagged=true" >> $GITHUB_OUTPUT
+            echo "From tag $GITHUB_REF_NAME: $VERSION"
+          else
+            LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            CURRENT_VERSION="${LATEST_TAG#v}"
+            : "${CURRENT_VERSION:=0.0.0}"
+
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+            case "${BUMP_TYPE:-patch}" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+            esac
+
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "tagged=false" >> $GITHUB_OUTPUT
+            echo "Bumped ${CURRENT_VERSION} -> ${VERSION} (${BUMP_TYPE:-patch})"
+          fi
+
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$VERSION' is not a version"; exit 1 ;;
+          esac
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # The solution filter, not the .sln: the solution carries an .esproj whose SDK ships with
+      # Visual Studio and cannot be restored on a bare runner. `-p:Version` stamps
+      # AssemblyVersion/FileVersion/InformationalVersion, which PackageVersion alone does not.
+      - name: Build
+        run: dotnet build D2ItemToolkit.CI.slnf -c Release -p:Version=${{ steps.version.outputs.version }}
+
+      # Nothing gets published that does not pass its own gates. Both suites, plus the differential
+      # inside the TypeScript run — a version where the two engines disagree is not shippable.
+      - name: Test (C#)
+        run: dotnet test D2ItemToolkit.CI.slnf -c Release --no-build
+
+      - run: npm ci
+      - name: Test (TypeScript)
+        run: npm test
+
+      - name: Pack
+        run: |
+          # npm pack --pack-destination does not create the directory, and relying on dotnet pack
+          # having made it first is a load-bearing accident of step order.
+          mkdir -p ./nupkg
+          dotnet pack src/D2ItemToolkit.Net/D2ItemToolkit.Net.csproj \
+            --configuration Release --no-build \
+            -p:Version=${{ steps.version.outputs.version }} \
+            --output ./nupkg
+          # The npm version is not stored in the repository either; set it for this publish only.
+          npm pkg set version=${{ steps.version.outputs.version }} --workspace d2itemtoolkit
+          npm --workspace d2itemtoolkit pack --pack-destination ./nupkg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: ./nupkg/*
+
+      # Exchanges the OIDC token for a temporary nuget.org key. Deliberately the step immediately
+      # before the push: the key lives one hour, and one OIDC token buys exactly one key.
+      #
+      # `user` is the nuget.org PROFILE NAME that owns the trusted-publishing policy — not an email
+      # address, and NOT the GitHub org. Those two differ by one character here: the nuget.org owner
+      # is `ResurrectedTrade`, the GitHub owner is `ResurrectedTrader`. Hardcoded rather than kept in
+      # a secret because it is not sensitive, and a wrong value fails the exchange rather than
+      # publishing somewhere unexpected.
+      - name: NuGet login
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ResurrectedTrade
+
+      - name: Push to NuGet
+        run: >
+          dotnet nuget push ./nupkg/*.nupkg
+          --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      # Trusted publishing on npm needs npm >= 11.5.1, and Node 22 ships 10.x — so upgrade rather
+      # than rely on whatever the runner image happens to bundle. Doing it now means the switch
+      # below is a one-line deletion later rather than another edit here.
+      - name: Use an npm that can do trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      # No token. npm authenticates by trusted publishing off the same OIDC identity nuget.org uses,
+      # so the whole job now holds no secrets — the one place a leak could have come from is gone.
+      # 0.1.0 had to go up from a workstation with a token first, because npm cannot configure a
+      # publisher for a package that does not exist; that token is revoked.
+      #
+      # No --provenance flag: trusted publishing attests automatically, and asking for it explicitly
+      # is redundant.
+      #
+      # The already-published check is `dotnet nuget push --skip-duplicate` for npm, which has no
+      # such flag and hard-fails on a duplicate. Two ways that bites: the tag for 0.1.0 gets pushed
+      # after 0.1.0 was published by hand, and a retry after a failed tag step recomputes the same
+      # version. Neither should fail a release whose packages are already where they belong.
+      - name: Push to npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "d2itemtoolkit@$VERSION" version > /dev/null 2>&1; then
+            echo "d2itemtoolkit@$VERSION is already on the registry — skipping."
+            exit 0
+          fi
+
+          npm --workspace d2itemtoolkit publish --access public
+
+      # Only for a manual run — a tag-triggered run is already standing on its tag.
+      - name: Create git tag
+        if: steps.version.outputs.tagged == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "v${{ steps.version.outputs.version }}"
+          --title "v${{ steps.version.outputs.version }}"
+          --generate-notes
+          ./nupkg/*
