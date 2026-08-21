@@ -57,6 +57,7 @@ export class D2DataFiles {
   readonly lowQualityItems: TxtFile | null;
   readonly charStats: TxtFile | null;
   readonly gems: TxtFile | null;
+  readonly runes: TxtFile | null;
   readonly experience: TxtFile | null;
   readonly properties: TxtFile | null;
   readonly skillRows: TxtFile | null;
@@ -201,6 +202,7 @@ export class D2DataFiles {
     this.lowQualityItems = optional(excel, 'lowqualityitems.txt');
     this.charStats = optional(excel, 'charstats.txt');
     this.gems = optional(excel, 'gems.txt');
+    this.runes = optional(excel, 'Runes.txt');
     this.colors = optional(excel, 'colors.txt');
     this.experience = optional(excel, 'Experience.txt');
     this.properties = optional(excel, 'Properties.txt');

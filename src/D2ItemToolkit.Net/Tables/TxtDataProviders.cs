@@ -42,6 +42,7 @@ namespace D2ItemToolkit
         public TxtFile LowQualityItems { get; private set; }
         public TxtFile CharStats { get; private set; }
         public TxtFile Gems { get; private set; }
+        public TxtFile Runes { get; private set; }
 
         // colors.txt. The ROW INDEX is the palette-shift value stored in the compiled tables; our
         // .txt copies still hold the 4-char `code`, so this is what turns one into the other.
@@ -173,6 +174,7 @@ namespace D2ItemToolkit
             data.LowQualityItems = Optional(excel, "lowqualityitems.txt");
             data.CharStats = Optional(excel, "charstats.txt");
             data.Gems = Optional(excel, "gems.txt");
+            data.Runes = Optional(excel, "Runes.txt");
             data.Colors = Optional(excel, "colors.txt");
             data.Experience = Optional(excel, "Experience.txt");
             data.Properties = Optional(excel, "Properties.txt");
