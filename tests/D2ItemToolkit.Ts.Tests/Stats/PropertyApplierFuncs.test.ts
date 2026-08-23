@@ -5,6 +5,7 @@ import { ItemTable } from '../../../src/D2ItemToolkit.Ts/src/Tables/ItemTable.js
 import { ItemTypeTree } from '../../../src/D2ItemToolkit.Ts/src/Tables/ItemTypeTree.js';
 import {
   PropertyApplier,
+  RollEnd,
   type ItemProperty,
 } from '../../../src/D2ItemToolkit.Ts/src/Stats/PropertyApplier.js';
 import { D2DataFiles } from '../../../src/D2ItemToolkit.Ts/src/Tables/TxtDataProviders.js';
@@ -370,5 +371,175 @@ describe('PropertyApplier poison', () => {
   it('leaves the duration alone when no poison damage is written', () => {
     const stats = apply('dmg-fire', 'cap', { min: 3, max: 14 });
     expect(stat(stats, StatPoisonCount)).toBeUndefined();
+  });
+});
+
+describe('the seven funcs the affix, unique, set, runeword and cube tables reach', () => {
+  function layered(stats: Map<number, number>, layer: number, statId: number): number | undefined {
+    return stats.get(ItemStatReader.packStatKey(layer, statId));
+  }
+
+  it.each([
+    // Amazon's three tabs are params 0..2, so class 0 packs flat.
+    [0, 0],
+    [1, 1],
+    [2, 2],
+    // Param 3 is the next class's first tab, and the stride jumps to 8 rather than 3.
+    [3, 8],
+    [5, 10],
+    // 20 is the highest param shipped — assassin's third tab.
+    [20, 50],
+  ])('func 10 packs skill tab param %i as layer %i', (param, layer) => {
+    // `skilltab` is a lone func 10 onto stat 188, and 148 cells across MagicPrefix, automagic,
+    // UniqueItems, SetItems and Runes reach it.
+    const stats = apply('skilltab', 'cap', { param, min: 2, max: 2 });
+
+    expect(ids(stats)).toEqual([188]);
+    expect(layered(stats, layer, 188)).toBe(2);
+  });
+
+  it('func 12 rolls the layer and takes the value from the param', () => {
+    // Ormus' Robes, the only shipped `skill-rand`: par=3, min=36, max=60. The +3 is the VALUE and
+    // the rolled skill id is the LAYER — 36..60 being the sorceress skills — so the low end of the
+    // roll lands on 36.
+    const stats = apply('skill-rand', 'uui', { param: 3, min: 36, max: 60 });
+
+    expect(ids(stats)).toEqual([107]);
+    expect(layered(stats, 36, 107)).toBe(3);
+
+    // Not the other way round: a value of 36 at layer 3 is the bug this pins.
+    expect(layered(stats, 3, 107)).toBeUndefined();
+  });
+
+  it('func 36 rolls the layer and takes the value from val', () => {
+    // Hellfire Torch, the only shipped `randclassskill`: min=0, max=6 over the seven classes, and
+    // the value comes from Properties.txt val1, which is 3.
+    const stats = apply('randclassskill', 'cm2', { min: 0, max: 6 });
+
+    expect(ids(stats)).toEqual([83]);
+    expect(layered(stats, 0, 83)).toBe(3);
+  });
+
+  it('func 23 writes no stat at all', () => {
+    // `ethereal` has a blank stat1: the handler flips a flag and applies the ethereal bonus, so
+    // nothing reaches a stat list. Ethereal Edge is one of the five users.
+    expect(ids(apply('ethereal', '7ba', { min: 0, max: 0 }))).toEqual([]);
+  });
+
+  it('func 18 packs both ends into one value', () => {
+    // "of Dawn" is `ac/time` 10..40 onto stat 268. Both ends are biased by +256 and packed as
+    // param + 4 * ((max << 10) + min), so the stat carries its own range.
+    const stats = apply('ac/time', 'cap', { min: 10, max: 40 });
+
+    expect(ids(stats)).toEqual([268]);
+
+    const low = 10 + 256;
+    const high = 40 + 256;
+    expect(stat(stats, 268)).toBe(4 * ((high << 10) + low));
+
+    // And the packing is recoverable, which is the whole point of the encoding.
+    const packed = stat(stats, 268) ?? 0;
+    expect(packed & 3).toBe(0);
+    expect(((packed >> 2) & 0x3ff) - 256).toBe(10);
+    expect(((packed >> 12) & 0x3ff) - 256).toBe(40);
+  });
+
+  it('func 18 biases a negative end rather than dropping it', () => {
+    // "of Sunlight" is the other shipped user and its min is NEGATIVE (-10..60), which the +256
+    // bias is there to carry.
+    const packed = stat(apply('ac/time', 'cap', { min: -10, max: 60 }), 268) ?? 0;
+
+    expect(((packed >> 2) & 0x3ff) - 256).toBe(-10);
+    expect(((packed >> 12) & 0x3ff) - 256).toBe(60);
+  });
+
+  it('func 19 packs the charge pair and the skill level', () => {
+    // Hellfire Torch's `charged`: param is the skill (Hydra, 62), min the charge count and max the
+    // level. Level 30 comes straight from max, the value packs (maxCharges << 8) + current, and
+    // the layer packs (skill << 6) + level.
+    const stats = apply('charged', 'cm2', { param: 62, min: 10, max: 30 });
+
+    expect(ids(stats)).toEqual([204]);
+
+    const skill = 62;
+    const level = 30;
+    const maxCharges = 10;
+
+    // Low end of the seed-drawn current count is maxCharges / 8 + 1.
+    expect(layered(stats, (skill << 6) + level, 204)).toBe(
+      (maxCharges << 8) + (Math.trunc(maxCharges / 8) + 1),
+    );
+  });
+
+  it('func 19 resolves the current charges to the requested end', () => {
+    // The current count is the only seed-drawn part, so the two ends bracket it while the high
+    // byte — the max charges — stays put.
+    const into = new Map<number, number>();
+    const high = new PropertyApplier(Data, Items, Types, RollEnd.High);
+    high.apply(PropertyApplier.PropModeGem, itemFor('cm2'), property('charged', 62, 10, 30), into);
+
+    expect(into.get(ItemStatReader.packStatKey((62 << 6) + 30, 204))).toBe((10 << 8) + 10);
+  });
+
+  it('func 19 reports the arms that need an item level', () => {
+    // A non-positive max derives the level from the item's own level (0x65f70a / 0x65f75b), which a
+    // record does not carry — so it takes the game's floor of 1 and is reported.
+    const into = new Map<number, number>();
+    const applied = applier();
+    const prop = property('charged', 62, 10, 0);
+    applied.apply(PropertyApplier.PropModeGem, itemFor('cm2'), prop, into);
+
+    expect(applied.itemLevelDependent.has(prop.propertyId)).toBe(true);
+    expect(into.get(ItemStatReader.packStatKey((62 << 6) + 1, 204))).toBe((10 << 8) + 2);
+  });
+
+  it('func 14 caps the socket count by the item’s own limits', () => {
+    // A cap is 2x2, so the footprint allows 4, but items.txt gemsockets is 2 — so a roll of 3
+    // clamps to 2 and lands on stat 194 as a SET.
+    const stats = apply('sock', 'cap', { min: 3, max: 3 });
+
+    expect(ids(stats)).toEqual([194]);
+    expect(stat(stats, 194)).toBe(2);
+  });
+
+  it('func 14 writes nothing on a base that takes no sockets', () => {
+    // mbl (heavy boots) has gemsockets 0, so ITEM_GetMaxSockCount returns min(0, tier) = 0
+    // whatever the item level, the cap collapses to 0 and 0x65f679 falls through to write nothing.
+    // Getting this wrong puts sockets on every pair of boots.
+    expect(apply('sock', 'mbl', { min: 3, max: 3 }).size).toBe(0);
+  });
+
+  it('func 14 reports that the tier cap needs an item level', () => {
+    // ITEM_GetMaxSockCount 0x62bc20 picks MaxSock1/25/40 by item level, which a record does not
+    // carry, so that half of the cap is reported rather than guessed.
+    const into = new Map<number, number>();
+    const applied = applier();
+    const prop = property('sock', 0, 3, 3);
+    applied.apply(PropertyApplier.PropModeGem, itemFor('cap'), prop, into);
+
+    expect(applied.itemLevelDependent.has(prop.propertyId)).toBe(true);
+  });
+
+  it('reports none of the seven as unsupported any more', () => {
+    for (const probe of [
+      { code: 'skilltab', item: 'cap', param: 0, min: 1, max: 1 },
+      { code: 'skill-rand', item: 'uui', param: 3, min: 36, max: 60 },
+      { code: 'randclassskill', item: 'cm2', param: 0, min: 0, max: 6 },
+      { code: 'ethereal', item: '7ba', param: 0, min: 0, max: 0 },
+      { code: 'ac/time', item: 'cap', param: 0, min: 10, max: 40 },
+      { code: 'charged', item: 'cm2', param: 62, min: 10, max: 30 },
+      { code: 'sock', item: 'cap', param: 0, min: 3, max: 3 },
+    ]) {
+      const into = new Map<number, number>();
+      const applied = applier();
+      applied.apply(
+        PropertyApplier.PropModeGem,
+        itemFor(probe.item),
+        property(probe.code, probe.param, probe.min, probe.max),
+        into,
+      );
+
+      expect([...applied.unsupportedFunc], probe.code).toEqual([]);
+    }
   });
 });

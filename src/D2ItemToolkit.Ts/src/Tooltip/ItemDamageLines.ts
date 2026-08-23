@@ -154,6 +154,67 @@ export class ItemDamageAggregate {
    * The C# `bool TryDescribe(int, out string)` pair. A string — INCLUDING the empty string —
    * means handled; null means not handled and the caller runs the DescFunc engine.
    */
+  /**
+   * Whether the aggregated line for this stat shows TWO numbers rather than one — "Adds 1-4 cold
+   * damage" against "+175% Enhanced Damage".
+   *
+   * Only the enhanced-damage line is single-valued: it prints the MIN half alone and the max half
+   * emits nothing at all (0x4e5aa4 returns the latch), so one roll span sits against it
+   * unambiguously. A min-max line's span would belong to neither of the two numbers on it, which
+   * is why those are left un-annotated.
+   */
+  static showsSeveralValues(statId: number): boolean {
+    return statId !== DamageStatIds.ItemMinDamagePercent;
+  }
+
+  /**
+   * The stats whose numbers an aggregated damage line prints, in print order — the min/max pair for
+   * "Adds 1-4 cold damage", and the min half alone for "+175% Enhanced Damage". Null when the stat
+   * drives no aggregated line.
+   */
+  static statsShownBy(statId: number): number[] | null {
+    switch (statId) {
+      case DamageStatIds.ItemMinDamagePercent:
+        return [DamageStatIds.ItemMinDamagePercent];
+
+      // The physical line prefers the one-hand pair and falls back to the secondary, and
+      // tryDescribePhysical has already chosen by the time this is asked — so both pairs are named
+      // and a stat with no span simply contributes nothing.
+      case DamageStatIds.MinDamage:
+      case DamageStatIds.MaxDamage:
+        return [DamageStatIds.MinDamage, DamageStatIds.MaxDamage];
+
+      case DamageStatIds.SecondaryMinDamage:
+      case DamageStatIds.SecondaryMaxDamage:
+        return [DamageStatIds.SecondaryMinDamage, DamageStatIds.SecondaryMaxDamage];
+
+      case DamageStatIds.FireMinDamage:
+      case DamageStatIds.FireMaxDamage:
+        return [DamageStatIds.FireMinDamage, DamageStatIds.FireMaxDamage];
+
+      case DamageStatIds.LightningMinDamage:
+      case DamageStatIds.LightningMaxDamage:
+        return [DamageStatIds.LightningMinDamage, DamageStatIds.LightningMaxDamage];
+
+      case DamageStatIds.MagicMinDamage:
+      case DamageStatIds.MagicMaxDamage:
+        return [DamageStatIds.MagicMinDamage, DamageStatIds.MagicMaxDamage];
+
+      case DamageStatIds.ColdMinDamage:
+      case DamageStatIds.ColdMaxDamage:
+        return [DamageStatIds.ColdMinDamage, DamageStatIds.ColdMaxDamage];
+
+      // Poison prints its two damage ends and a duration, but the duration is a divisor rather than
+      // a rolled magnitude, so only the pair is named.
+      case DamageStatIds.PoisonMinDamage:
+      case DamageStatIds.PoisonMaxDamage:
+        return [DamageStatIds.PoisonMinDamage, DamageStatIds.PoisonMaxDamage];
+
+      default:
+        return null;
+    }
+  }
+
   tryDescribe(statId: number): string | null {
     switch (statId) {
       case DamageStatIds.ItemMaxDamagePercent:

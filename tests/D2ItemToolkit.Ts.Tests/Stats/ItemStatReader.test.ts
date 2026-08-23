@@ -20,7 +20,7 @@ const SampleRecord = `{
       { "source": "setBonus", "stateNo": 166, "flags": 8256,
         "stats": [ { "id": 41, "value": 15 } ] }
     ],
-    "sockets": [
+    "items": [
       { "classId": 620,
         "statsLists": [ { "source": "quality", "stateNo": 0, "flags": 64,
             "stats": [ { "id": 17, "value": 15 },
@@ -439,7 +439,7 @@ describe('classification', () => {
 /** Indexing is `Unit | undefined` under noUncheckedIndexedAccess; a missing filler is a
  * broken fixture, so say so rather than letting an empty record render a plausible nothing. */
 function socketAt(record: Unit, index: number): Unit {
-  const filler = ItemStatReader.enumerateSockets(record)[index];
+  const filler = record.items[index];
   if (filler === undefined) {
     throw new Error(`the fixture has no socket ${String(index)}`);
   }

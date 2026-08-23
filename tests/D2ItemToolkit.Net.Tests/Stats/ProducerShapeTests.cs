@@ -7,6 +7,10 @@ namespace D2ItemToolkit.Tests
     /// Two documents written in EXACTLY the shape ITEMSTATS_StoreUnit emits — every key spelled as the
     /// C++ side spells it, nothing translated by a test helper — driven through the whole pipeline.
     /// This is the compatibility check between producer and consumer.
+    ///
+    /// Keep it EXACT. It once carried a `source` key the producer had stopped emitting, which the
+    /// reader silently ignores — so the standing compatibility proof had quietly stopped proving
+    /// the current shape.
     /// </summary>
     public class ProducerShapeTests
     {
@@ -33,18 +37,20 @@ namespace D2ItemToolkit.Tests
             ""magicSuffix"": [ 0, 0, 0 ],
             ""earLevel"": 0,
             ""playerName"": """",
+            ""location"": 1,
+            ""x"": 4,
             ""statsLists"": [
-              { ""source"": ""base"", ""stateNo"": 0, ""flags"": 2147483648,
+              { ""stateNo"": 0, ""flags"": 2147483648,
                 ""stats"": [ { ""id"": 31, ""value"": 120 }, { ""id"": 72, ""value"": 40 },
                              { ""id"": 73, ""value"": 62 }, { ""id"": 194, ""value"": 1 },
                              { ""id"": 20, ""value"": 25 } ] }
             ],
-            ""sockets"": [
+            ""items"": [
               { ""unitType"": 4, ""classId"": %GPR%, ""code"": ""gpr"", ""quality"": 2,
                 ""itemFlags"": 16, ""format"": 100, ""fileIndex"": -1,
                 ""magicPrefix"": [ 0, 0, 0 ], ""magicSuffix"": [ 0, 0, 0 ],
                 ""statsLists"": [
-                  { ""source"": ""quality"", ""stateNo"": 0, ""flags"": 64,
+                  { ""stateNo"": 0, ""flags"": 64,
                     ""stats"": [ { ""id"": 39, ""value"": 40 } ] }
                 ] }
             ]
@@ -58,10 +64,10 @@ namespace D2ItemToolkit.Tests
             ""name"": ""Bob"",
             ""skills"": [ { ""skill"": 117, ""level"": 20 } ],
             ""statsLists"": [
-              { ""source"": ""base"", ""stateNo"": 0, ""flags"": 0,
+              { ""stateNo"": 0, ""flags"": 0,
                 ""stats"": [ { ""id"": 12, ""value"": 60 }, { ""id"": 0, ""value"": 120 },
                              { ""id"": 2, ""value"": 90 } ] },
-              { ""source"": ""other"", ""stateNo"": 101, ""flags"": 0,
+              { ""stateNo"": 101, ""flags"": 0,
                 ""stats"": [ { ""id"": 20, ""value"": 35 } ] }
             ]
         }";
@@ -143,7 +149,7 @@ namespace D2ItemToolkit.Tests
                 ItemDoc.Replace("%LRG%", Items.ClassIdForCode("lrg").ToString())
                        .Replace("%GPR%", Items.ClassIdForCode("gpr").ToString()));
 
-            foreach (IUnit socket in ItemStatReader.EnumerateSockets(item))
+            foreach (IUnit socket in item.Items)
             {
                 ItemIdentity filler = ItemRecordReader.ReadIdentity(socket);
 

@@ -83,6 +83,13 @@ export enum ItemTooltipSection {
   FullSetBonus = 'FullSetBonus',
 
   PartialSetBonus = 'PartialSetBonus',
+
+  /**
+   * Not a section the game has. One block per socket filler, emitted below the item when
+   * `TooltipOptions.separateSocketContributions` is set, so a reader can tell what each gem or rune
+   * is actually contributing. Never produced otherwise.
+   */
+  SocketContribution = 'SocketContribution',
 }
 
 export const ItemTooltipColor = {
@@ -140,6 +147,17 @@ export class ItemTooltipLine {
   section: ItemTooltipSection = ItemTooltipSection.None;
 
   color = 0;
+
+  /**
+   * The stat this line displays, or -1 when it displays none — a name, a requirement, a blank. Set
+   * for every modifier line and for the Defense line. With `layer` it is the key to look the line
+   * up in `ItemRollRanges.stats`, which is what makes a caller's own range display possible
+   * without re-deriving the mapping.
+   */
+  statId = -1;
+
+  /** The stat's layer — the skill, class or tab. 0 for a plain stat. */
+  layer = 0;
 
   emitsColorMarker = false;
 
@@ -508,11 +526,16 @@ export class ItemTooltipComposer {
 
       let running = color;
       let firstOfSection = true;
+      const sectionStat = ItemTooltipComposer.statOfSection(section);
+
       for (const part of this.splitLines(text as string)) {
         const line = new ItemTooltipLine();
-        line.text = part;
+        line.text = firstOfSection
+          ? this.annotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
+          : part;
         line.section = section;
         line.color = running;
+        line.statId = firstOfSection ? sectionStat : -1;
         line.emitsColorMarker = firstOfSection;
         firstOfSection = false;
         appended.push(line);
@@ -706,11 +729,16 @@ export class ItemTooltipComposer {
 
       let running = color;
       let firstOfSection = true;
+      const sectionStat = ItemTooltipComposer.statOfSection(section);
+
       for (const part of parts) {
         const line = new ItemTooltipLine();
-        line.text = part;
+        line.text = firstOfSection
+          ? this.annotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
+          : part;
         line.section = section;
         line.color = running;
+        line.statId = firstOfSection ? sectionStat : -1;
 
         line.emitsColorMarker = firstOfSection;
         firstOfSection = false;
@@ -1019,6 +1047,69 @@ export class ItemTooltipComposer {
     return keptAppendOrder;
   }
 
+  /**
+   * Supplies the range text to append to a line, or null for none. Null by default, so an
+   * un-annotated render is byte-identical to what the game draws — the corpus never sets it and the
+   * differential holds that.
+   */
+  rangeAnnotation: ((shownStats: readonly number[], layer: number) => string | null) | null = null;
+
+  /**
+   * The colour the annotation is painted in, or -1 to inherit the line's. A marker restoring the
+   * line's own colour follows it, so the rest of the line is unaffected — and the running colour is
+   * tracked from the UN-annotated text, so an annotation can never bleed into the next line.
+   */
+  rangeColor = -1;
+
+  /**
+   * The single stat a section displays, or -1. Only the Defense line qualifies: it shows one stat
+   * whose base genuinely rolls. Durability and the damage lines are excluded on purpose — their
+   * base columns do not roll, so a span there would be about the `dur%` or `dmg%` modifier and
+   * belongs on that modifier's own line, where it already is.
+   */
+  private static statOfSection(section: ItemTooltipSection): number {
+    return section === ItemTooltipSection.ArmorClass ? ItemTooltipComposer.StatArmorClass : -1;
+  }
+
+  private static readonly StatArmorClass = 31;
+
+  /**
+   * Appends the range text INSIDE the line — before its trailing terminator, since `splitLines`
+   * keeps that on the part it belongs to and appending after it would put the annotation on the
+   * following line.
+   */
+  private annotated(
+    part: string,
+    layer: number,
+    shownStats: readonly number[] | null,
+    lineColor: number,
+  ): string {
+    if (this.rangeAnnotation === null || shownStats === null || shownStats.length === 0) {
+      return part;
+    }
+
+    let annotation = this.rangeAnnotation(shownStats, layer);
+    if (annotation === null || annotation.length === 0) {
+      return part;
+    }
+
+    if (this.rangeColor >= 0 && this.rangeColor !== lineColor) {
+      annotation =
+        ItemTooltipColor.Marker +
+        String(this.rangeColor) +
+        annotation +
+        ItemTooltipColor.Marker +
+        String(lineColor);
+    }
+
+    const terminator = this.sections.lineTerminator ?? '';
+    if (terminator.length !== 0 && part.endsWith(terminator)) {
+      return part.slice(0, part.length - terminator.length) + annotation + terminator;
+    }
+
+    return part + annotation;
+  }
+
   private *splitLines(text: string, terminateTrailing = true): Generator<string> {
     const terminator = this.sections.lineTerminator;
     if (isNullOrEmpty(terminator)) {
@@ -1087,14 +1178,27 @@ export class ItemTooltipComposer {
     for (const modifier of this.modifiers.describe(packedStats)) {
       const text: string = modifier.preJoined ? modifier.text : modifier.text + terminator;
 
+      let firstPart = true;
+
       for (const part of this.splitLines(text, false)) {
         const line = new ItemTooltipLine();
-        line.text = part;
+
+        // An aggregated line speaks for several stats, so one stat's span against it would be
+        // unattributable to either half — the line still carries statId and layer, which is what a
+        // caller wanting a richer display works from.
+        // An aggregated line gets its stats named, so the formatter can show a composite span
+        // rather than one number belonging to neither half.
+        line.text = firstPart
+          ? this.annotated(part, modifier.layer, modifier.shownStats ?? [modifier.statId], running)
+          : part;
         line.section = ItemTooltipSection.Modifiers;
         line.color = running;
+        line.statId = modifier.statId;
+        line.layer = modifier.layer;
 
         line.emitsColorMarker = firstOfSection;
         firstOfSection = false;
+        firstPart = false;
         lines.push(line);
 
         running = ItemTooltipComposer.lastEmbeddedColor(part, running);

@@ -40,11 +40,43 @@ namespace D2ItemToolkit
             return itemTypeRow >= 0 && itemTypeRow < _throwable.Length && _throwable[itemTypeRow];
         }
 
+        /// <summary>
+        /// The socket cap for this type at a given item level — ITEM_GetMaxSockCount 0x62bc20 picks
+        /// `MaxSock1` at level &lt;= 25, `MaxSock25` at &lt;= 40 and `MaxSock40` above (0x62bc81,
+        /// 0x62bc8c). The column NAMES are the level each tier starts at, not the cap it holds.
+        ///
+        /// Returns -1 for an unknown level (<see cref="IUnit.ItemLevel"/> being -1) so a caller can
+        /// tell "no cap known" from "a cap of zero", which is a real answer for boots and gloves.
+        /// </summary>
+        public int MaxSockets(int itemTypeRow, int itemLevel)
+        {
+            if (itemLevel < 0 || itemTypeRow < 0 || itemTypeRow >= _maxSock.Length)
+            {
+                return -1;
+            }
+
+            int[] tiers = _maxSock[itemTypeRow];
+            return itemLevel <= 25 ? tiers[0] : (itemLevel <= 40 ? tiers[1] : tiers[2]);
+        }
+
+        private readonly int[][] _maxSock;
+
         public ItemTypeTree(TxtFile itemTypes)
         {
             if (itemTypes == null) throw new ArgumentNullException("itemTypes");
 
             int rows = itemTypes.RowCount;
+
+            _maxSock = new int[rows][];
+            for (int row = 0; row < rows; ++row)
+            {
+                _maxSock[row] = new[]
+                {
+                    itemTypes.GetInt(row, "MaxSock1"),
+                    itemTypes.GetInt(row, "MaxSock25"),
+                    itemTypes.GetInt(row, "MaxSock40"),
+                };
+            }
 
             _throwable = new bool[rows];
             bool hasThrowable = itemTypes.HasColumn("Throwable");

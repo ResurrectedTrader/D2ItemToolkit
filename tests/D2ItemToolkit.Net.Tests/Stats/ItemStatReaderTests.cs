@@ -21,7 +21,7 @@ namespace D2ItemToolkit.Tests
               { ""source"": ""setBonus"", ""stateNo"": 166, ""flags"": 8256,
                 ""stats"": [ { ""id"": 41, ""value"": 15 } ] }
             ],
-            ""sockets"": [
+            ""items"": [
               { ""classId"": 620,
                 ""statsLists"": [ { ""source"": ""quality"", ""stateNo"": 0, ""flags"": 64,
                     ""stats"": [ { ""id"": 17, ""value"": 15 },
@@ -329,7 +329,7 @@ namespace D2ItemToolkit.Tests
             Unit doc = Parse(SampleRecord);
             {
                 IUnit filler =
-                    ItemStatReader.EnumerateSockets(doc).ElementAt(socket);
+                    doc.Items.ElementAt(socket);
 
                 Assert.Equal(expected,
                     Render(ItemStatReader.ReconstructView(filler, ItemStatView.ItemOnly())));
@@ -394,6 +394,25 @@ namespace D2ItemToolkit.Tests
             {
                 Assert.Empty(ItemStatReader.ReadSockets(doc));
             }
+        }
+
+        [Fact]
+        public void A_null_filler_reads_as_an_empty_one_rather_than_throwing()
+        {
+            // `"items": [null]` is legal JSON, and ten reader sites dereference an element. Every
+            // C# entry point threw on it while the TypeScript peer — whose reader maps a null to a
+            // default unit — rendered the item. Coerced at the DTO boundary so the two agree, and
+            // coerced rather than dropped because POSITION is the socket index.
+            Unit doc = Parse(@"{""items"":[ null, { ""classId"": 620 } ]}");
+
+            SortedDictionary<int, uint> sockets = ItemStatReader.ReadSockets(doc);
+
+            Assert.Equal(new[] { 0, 1 }, sockets.Keys.ToArray());
+            Assert.Equal(0u, sockets[0]);
+            Assert.Equal(620u, sockets[1]);
+
+            // And the whole pipeline survives it.
+            Assert.NotNull(ItemStatReader.ReconstructView(doc, ItemStatView.Everything()));
         }
 
         // =================================================================

@@ -40,9 +40,17 @@ namespace D2ItemToolkit
         public TxtFile RareSuffix { get; private set; }
         public TxtFile RarePrefix { get; private set; }
         public TxtFile LowQualityItems { get; private set; }
+
+        // The superior counterpart of lowqualityitems.txt. Unlike that file it carries the rolled
+        // ranges, so a superior item's modifiers can be attributed to a row.
+        public TxtFile QualityItems { get; private set; }
         public TxtFile CharStats { get; private set; }
         public TxtFile Gems { get; private set; }
         public TxtFile Runes { get; private set; }
+
+        // Holds the fixed mods a crafted recipe adds on top of its random affixes, with their
+        // ranges — the only place those ranges are recorded.
+        public TxtFile CubeMain { get; private set; }
 
         // colors.txt. The ROW INDEX is the palette-shift value stored in the compiled tables; our
         // .txt copies still hold the 4-char `code`, so this is what turns one into the other.
@@ -172,9 +180,11 @@ namespace D2ItemToolkit
             data.RareSuffix = Optional(excel, "RareSuffix.txt");
             data.RarePrefix = Optional(excel, "RarePrefix.txt");
             data.LowQualityItems = Optional(excel, "lowqualityitems.txt");
+            data.QualityItems = Optional(excel, "qualityitems.txt");
             data.CharStats = Optional(excel, "charstats.txt");
             data.Gems = Optional(excel, "gems.txt");
             data.Runes = Optional(excel, "Runes.txt");
+            data.CubeMain = Optional(excel, "cubemain.txt");
             data.Colors = Optional(excel, "colors.txt");
             data.Experience = Optional(excel, "Experience.txt");
             data.Properties = Optional(excel, "Properties.txt");
@@ -515,6 +525,7 @@ namespace D2ItemToolkit
         private readonly string[] _names;
         private readonly int[] _classes;
         private readonly int[] _requiredLevels;
+        private readonly int[] _maxLevels;
         private readonly string _sentinel;
         private readonly string[] _classCodes;
 
@@ -534,6 +545,13 @@ namespace D2ItemToolkit
             for (int row = 0; row < skills.RowCount; ++row)
             {
                 _requiredLevels[row] = hasReqLevel ? skills.GetInt(row, "reqlevel") : 0;
+            }
+
+            _maxLevels = new int[skills.RowCount];
+            bool hasMaxLevel = skills.HasColumn("maxlvl");
+            for (int row = 0; row < skills.RowCount; ++row)
+            {
+                _maxLevels[row] = hasMaxLevel ? skills.GetInt(row, "maxlvl") : 0;
             }
 
             _sentinel = strings.GetByIndex(DescStringIds.DescStr2Sentinel);
@@ -661,6 +679,23 @@ namespace D2ItemToolkit
         public int RequiredLevel(int skillId)
         {
             return skillId >= 0 && skillId < _requiredLevels.Length ? _requiredLevels[skillId] : -1;
+        }
+
+        /// <summary>
+        /// SKILL_GetMaxLevelForSkill 0x4aa8b0 — skills.txt "maxlvl" (+0x12C), falling back to **20**
+        /// both when the column is non-positive and when the id is out of range (0x4aa8d9). The
+        /// fallback is the value, not an error code, so this never returns -1.
+        /// </summary>
+        public int MaxLevel(int skillId)
+        {
+            const int Default = 20;
+
+            if (skillId < 0 || skillId >= _maxLevels.Length)
+            {
+                return Default;
+            }
+
+            return _maxLevels[skillId] > 0 ? _maxLevels[skillId] : Default;
         }
     }
 

@@ -5,12 +5,12 @@ namespace D2ItemToolkit
 {
     internal static class ItemStatReader
     {
-        // A unit document is self-similar: identity fields, `statsLists` and `sockets`,
+        // A unit document is self-similar: identity fields, `statsLists` and `items`,
         // where each socket entry is another unit document and its POSITION is the socket index. An
         // item and a player are both D2UnitStrc, so both serialise to this same shape.
         //
         // There is no per-socket view, and no socket index anywhere: to describe one filler, take
-        // EnumerateSockets().ElementAt(n) and view THAT record with ItemOnly(). Self-similarity
+        // Items[n] and view THAT record with ItemOnly(). Self-similarity
         // means the whole reader already works on it.
 
         // (layer << 16) | stat — LAYER-major, which is the MIRROR of the engine's own packing.
@@ -112,6 +112,24 @@ namespace D2ItemToolkit
             return EnumerateGroups(record, false);
         }
 
+        /// <summary>
+        /// This record's OWN groups, without descending into <see cref="IUnit.Items"/>.
+        ///
+        /// The recursion above belongs to the SOCKET relation: a filler's stats are part of what
+        /// the item grants, so folding them in is right. `Items` carries the other relation too —
+        /// a wearer's carried gear — and those stats are emphatically NOT the wearer's. Anything
+        /// reading a PLAYER wants this one; anything reading an item wants the other.
+        /// </summary>
+        public static IEnumerable<ItemStatGroup> EnumerateOwnGroups(IUnit record)
+        {
+            if (record == null) throw new ArgumentNullException("record");
+
+            foreach (IUnitStatList group in record.StatsLists)
+            {
+                yield return new ItemStatGroup(group, false);
+            }
+        }
+
         private static IEnumerable<ItemStatGroup> EnumerateGroups(IUnit record, bool fromSocket)
         {
             foreach (IUnitStatList group in record.StatsLists)
@@ -119,7 +137,7 @@ namespace D2ItemToolkit
                 yield return new ItemStatGroup(group, fromSocket);
             }
 
-            foreach (IUnit socket in EnumerateSockets(record))
+            foreach (IUnit socket in record.Items)
             {
                 foreach (ItemStatGroup group in EnumerateGroups(socket, true))
                 {
@@ -128,23 +146,12 @@ namespace D2ItemToolkit
             }
         }
 
-        /// <summary>
-        /// The socket records in index order. Position IS the index: the producer sorts by the
-        /// ordinal INVENTORY_PlaceItemInSocket assigned, which is contiguous from 0.
-        /// </summary>
-        public static IEnumerable<IUnit> EnumerateSockets(IUnit record)
-        {
-            if (record == null) throw new ArgumentNullException("record");
-
-            return record.Sockets;
-        }
-
         /// <summary>Socket index to the filler's classId, for the writers that only need that.</summary>
         public static SortedDictionary<int, uint> ReadSockets(IUnit record)
         {
             var sockets = new SortedDictionary<int, uint>();
             int index = 0;
-            foreach (IUnit socket in EnumerateSockets(record))
+            foreach (IUnit socket in record.Items)
             {
                 // The document's two fallbacks for a missing classId differ: identity wants -1
                 // ("no such row"), this map wants 0. Keep the 0 — a negative would widen to
@@ -158,7 +165,7 @@ namespace D2ItemToolkit
     }
 
     // The three wire names UnitJson reads by hand. The other six the producer emits — statsLists,
-    // stats, sockets, stateNo, flags, classId — are matched by System.Text.Json's camelCase policy
+    // stats, items, stateNo, flags, classId — are matched by System.Text.Json's camelCase policy
     // against the DTO's property names, so a constant for them checked nothing and none was
     // referenced. They also claimed to mirror producer/ItemStatStorage.h and had already drifted
     // from it in both directions, which is worse than not claiming it.

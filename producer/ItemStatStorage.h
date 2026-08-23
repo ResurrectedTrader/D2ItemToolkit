@@ -26,10 +26,13 @@
 #pragma warning(pop)
 
 
-// A record is SELF-SIMILAR: identity fields inline, then `statsLists[]` and `sockets[]`, where each
-// socket entry is another record of the same shape and its POSITION in the array is the socket
-// index. There is no envelope: no `version`, no `item`/`groups` wrapper, and no nested `player` —
-// a viewer is a separate document of the same shape, handed to the consumer alongside this one.
+// A record is SELF-SIMILAR: identity fields inline, then `statsLists[]` and `items[]`. On an ITEM,
+// `items[]` holds its socket fillers and POSITION in the array is the socket index. The format also
+// allows a WEARER's carried gear there — that is what lets a consumer derive set state instead of
+// being handed bit masks — but THIS EXAMPLE DOES NOT CAPTURE IT; see ITEMSTATS_StoreUnit.
+//
+// There is no envelope: no `version`, no `item`/`groups` wrapper, and no nested `player` — a viewer
+// is a separate document of the same shape, handed to the consumer alongside this one.
 
 // Named once so a typo is a compile error rather than a silently missing field.
 // Mirrored by ItemStatKeys/ItemRecordKeys on the consumer side.
@@ -37,7 +40,9 @@ namespace ItemStatKeys
 {
 	static constexpr const char* StatsLists = "statsLists";
 	static constexpr const char* Stats      = "stats";
-	static constexpr const char* Sockets   = "sockets";
+	static constexpr const char* Items     = "items";
+	static constexpr const char* Location  = "location";
+	static constexpr const char* GridX     = "x";
 	static constexpr const char* StateNo   = "stateNo";
 	static constexpr const char* Flags     = "flags";
 	static constexpr const char* StatId    = "id";
@@ -86,15 +91,21 @@ inline uint16_t ITEMSTATS_LayerFromKey(int32_t nKey) { return uint16_t(uint32_t(
 
 // Serialises a unit — an item or a player — to one self-similar shape:
 //
-//   { unitType, classId, <identity fields>, statsLists: [ StatList ], sockets: [ Unit ] }
+//   { unitType, classId, <identity fields>, statsLists: [ StatList ], items: [ Unit ] }
 //
 // Both are D2UnitStrc in the game, so both serialise the same way. There is no version field and no
 // nesting of one inside the other: a caller that wants a player-dependent description stores the two
 // documents separately and hands both to the consumer.
 //
-// Only an ITEM nests contained units. A player carries the same kind of extended statlist child for
-// every piece of equipment, and re-serialising the wearer's whole kit inside one item document would
-// duplicate the very item being described.
+// `items[]` means one relation on each kind of unit: an ITEM's socket fillers, or a WEARER's carried
+// gear. That is ONE FIELD carrying TWO relations, and a consumer must tell them apart: a reader that
+// recurses — as a socket reader must — folds a wearer's carried gear into the wearer's own stats.
+//
+// This example emits the ITEM half only. A wearer's carried gear needs an inventory walk it does
+// not do, so set derivation is unreachable from a capture until that lands.
+//
+// A wearer's items are NOT nested inside an item document — the two documents stay separate, and
+// re-serialising the whole kit inside the item being described would duplicate it.
 //
 // Nothing precomputed is emitted. Everything the description engine needs beyond the stat lists is
 // derivable on the consumer side from the excel tables plus this document:

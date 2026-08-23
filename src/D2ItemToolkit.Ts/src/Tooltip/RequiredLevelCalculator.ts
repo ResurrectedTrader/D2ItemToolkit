@@ -55,7 +55,7 @@ export class RequiredLevelCalculator {
     // 0x62b901 recurses the WHOLE calculation into every socketed item, so a filler's own
     // quality affixes and its stats 107/97/92 all reach the host.
     for (const filler of RequiredLevelCalculator.fillers(socketUnits, sockets)) {
-      const required = this.calculate(filler.identity, viewer, filler.stats, filler.sockets);
+      const required = this.calculate(filler.identity, viewer, filler.stats, filler.items);
       if (required > result) {
         result = required;
       }

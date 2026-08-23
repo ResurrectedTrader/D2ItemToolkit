@@ -8,7 +8,7 @@
  */
 
 // The unit you hand in. An item and a player are the same struct in the game, so both are a
-// Unit; a socket filler is another one nested in `sockets`.
+// Unit; a socket filler is another one nested in `items`.
 export {
   MaxAffixSlots,
   UnitFlagExpansion,
@@ -41,6 +41,14 @@ export {
   ItemTooltipSection,
   type ItemTooltipLine,
 } from './Tooltip/ItemTooltip.js';
+
+// What `TooltipEngine.ranges` gives back.
+export {
+  RollSources,
+  type ItemRollRanges,
+  type RolledLayerRange,
+  type RolledStatRange,
+} from './Stats/RolledRangeReconstructor.js';
 
 // The DTO for an identified set item. Only what the item document cannot say: which siblings the
 // viewer holds, the two worn masks, whether the piece is equipped, and the full-set stat block.

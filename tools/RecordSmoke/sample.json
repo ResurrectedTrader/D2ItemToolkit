@@ -34,7 +34,7 @@
       "stats": [ { "id": 41, "value": 15 } ]
     }
   ],
-  "sockets": [
+  "items": [
     {
       "unitType": 4,
       "classId": 620,

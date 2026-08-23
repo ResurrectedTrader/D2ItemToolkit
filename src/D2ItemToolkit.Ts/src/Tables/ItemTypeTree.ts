@@ -10,6 +10,7 @@ export class ItemTypeTree {
   private readonly rowByCode: Map<string, number>;
   private readonly isUnderMatrix: boolean[][];
   private readonly throwable: boolean[];
+  private readonly maxSock: number[][];
   private readonly classCodes: string[];
 
   // The itemtypes `Code` column. NOT classCodes, which is the `Class` column — the character
@@ -39,12 +40,38 @@ export class ItemTypeTree {
     );
   }
 
+  /**
+   * The socket cap for this type at a given item level — ITEM_GetMaxSockCount 0x62bc20 picks
+   * `MaxSock1` at level <= 25, `MaxSock25` at <= 40 and `MaxSock40` above (0x62bc81, 0x62bc8c). The
+   * column NAMES are the level each tier starts at, not the cap it holds.
+   *
+   * Returns -1 for an unknown level ({@link IUnit.itemLevel} being -1) so a caller can tell "no cap
+   * known" from "a cap of zero", which is a real answer for boots and gloves.
+   */
+  maxSockets(itemTypeRow: number, itemLevel: number): number {
+    if (itemLevel < 0 || itemTypeRow < 0 || itemTypeRow >= this.maxSock.length) {
+      return -1;
+    }
+
+    const tiers = this.maxSock[itemTypeRow] as number[];
+    return (itemLevel <= 25 ? tiers[0] : itemLevel <= 40 ? tiers[1] : tiers[2]) as number;
+  }
+
   constructor(itemTypes: TxtFile | null | undefined) {
     if (itemTypes === null || itemTypes === undefined) {
       throw new Error('itemTypes');
     }
 
     const rows = itemTypes.rowCount;
+
+    this.maxSock = [];
+    for (let row = 0; row < rows; ++row) {
+      this.maxSock.push([
+        itemTypes.getInt(row, 'MaxSock1'),
+        itemTypes.getInt(row, 'MaxSock25'),
+        itemTypes.getInt(row, 'MaxSock40'),
+      ]);
+    }
 
     this.throwable = new Array<boolean>(rows).fill(false);
     const hasThrowable = itemTypes.hasColumn('Throwable');

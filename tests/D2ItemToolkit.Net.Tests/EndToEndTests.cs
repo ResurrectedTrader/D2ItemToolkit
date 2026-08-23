@@ -25,7 +25,7 @@ namespace D2ItemToolkit.Tests
               { ""source"": ""setBonus"", ""stateNo"": 165, ""flags"": 8256,
                 ""stats"": [ { ""id"": 0, ""value"": 20 } ] }
             ],
-            ""sockets"": [
+            ""items"": [
               { ""classId"": 620,
                 ""statsLists"": [ { ""source"": ""quality"", ""stateNo"": 0, ""flags"": 64,
                     ""stats"": [ { ""id"": 17, ""value"": 15 },
@@ -134,7 +134,7 @@ namespace D2ItemToolkit.Tests
             Unit doc = Unit.FromJson(Record);
             {
                 // A filler is a record of the same shape, so it describes through the same reader.
-                IUnit filler = ItemStatReader.EnumerateSockets(doc).ElementAt(1);
+                IUnit filler = doc.Items.ElementAt(1);
 
                 SortedDictionary<int, int> view =
                     ItemStatReader.ReconstructView(filler, ItemStatView.ItemOnly());

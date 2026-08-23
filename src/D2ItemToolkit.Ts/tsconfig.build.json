@@ -9,7 +9,13 @@
     // is worse: EmbeddedDataBlob.ts is 713 kB of base64, so its map alone grew to 747 kB.
     // `tsconfig.json` keeps maps on for local builds and tests, where the sources are present.
     "sourceMap": false,
-    "declarationMap": false
+    "declarationMap": false,
+
+    // The C# peers of setStateOf / earnedSetIdsOf / renderSetItem / defaultRangeAnnotation are
+    // `internal`. TypeScript has no such modifier, so they carry `` and this strips them
+    // from the emitted .d.ts — the published surface then matches the C# one. They stay callable
+    // inside the package, which Differential.ts needs.
+    "stripInternal": true
   },
   "include": ["src/**/*.ts"],
   // The differential harness deliberately reaches past the facade to compare intermediate layers

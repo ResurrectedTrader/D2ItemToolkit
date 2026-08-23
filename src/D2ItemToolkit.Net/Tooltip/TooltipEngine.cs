@@ -30,6 +30,7 @@ namespace D2ItemToolkit
         private readonly EquipRequirements _requirements;
         private readonly RequiredLevelCalculator _level;
         private readonly SocketStatSynthesis _socketStats;
+        private readonly RolledRangeReconstructor _ranges;
 
         private TooltipEngine(D2DataFiles data)
         {
@@ -42,6 +43,8 @@ namespace D2ItemToolkit
             _requirements = new EquipRequirements(data, _items);
             _level = new RequiredLevelCalculator(data, _items);
             _socketStats = new SocketStatSynthesis(data, _items, _types);
+            _ranges = new RolledRangeReconstructor(
+                data, _items, _types, new MagicAffixTable(data), _sets);
         }
 
         /// <summary>The tables shipped inside this assembly. Built once, then reused.</summary>
@@ -116,14 +119,28 @@ namespace D2ItemToolkit
             if (item == null) throw new ArgumentNullException("item");
 
             TooltipOptions opts = options ?? TooltipOptions.Default;
-            Composed composed = Compose(item, viewer, opts, opts.IncludeSockets);
+
+            // Separating the fillers means the item's own block must not contain them, which is
+            // exactly what IncludeSockets false already does — they are moved, not dropped.
+            bool includeSockets = opts.IncludeSockets && !opts.SeparateSocketContributions;
+            Composed composed = Compose(item, viewer, opts, includeSockets);
 
             if (composed.Kind == ItemTooltipKind.IdentifiedSetItem)
             {
-                // Nothing in the item document says which siblings the viewer owns, so the default
-                // input is "none", which paints every piece red and selects no tier — exactly what
-                // the game draws for a character carrying this piece alone.
-                return RenderSetItem(item, new SetItemTooltipInput(), viewer, opts);
+                // Derived from the viewer rather than defaulted to "none". The old default painted
+                // every piece red and selected no tier, and — because the full-set block is gated
+                // on IsEquipped — silently suppressed it for anyone actually wearing the set.
+                // A viewer that carries nothing still yields exactly that empty input.
+                return RenderSetItem(item, SetStateOf(item, viewer), viewer, opts);
+            }
+
+            // Installed BEFORE composing, because the annotation is written into each line's text
+            // as it is built rather than patched onto the finished list.
+            if (opts.ShowRolledRanges)
+            {
+                composed.Composer.RangeAnnotation =
+                    BuildRangeAnnotation(item, opts, includeSockets);
+                composed.Composer.RangeColor = opts.RangeColor;
             }
 
             IReadOnlyList<ItemTooltipLine> lines =
@@ -131,7 +148,464 @@ namespace D2ItemToolkit
                     ? composed.Composer.ComposeBook(composed.Context)
                     : composed.Composer.Compose(composed.Context, composed.ModifierStats);
 
+            if (opts.SeparateSocketContributions)
+            {
+                lines = WithSocketBlocks(item, viewer, opts, lines);
+            }
+
             return new Tooltip(composed.Kind, lines, composed.Composer, opts);
+        }
+
+        /// <summary>
+        /// Appends one block per filler BELOW the item. Lines are in display order, so appending
+        /// puts them at the bottom, which is where a reader expects "and this is what the gems are
+        /// doing".
+        /// </summary>
+        private IReadOnlyList<ItemTooltipLine> WithSocketBlocks(
+            IUnit item,
+            IUnit viewer,
+            TooltipOptions options,
+            IReadOnlyList<ItemTooltipLine> body)
+        {
+            int slot = _socketStats.SlotFor(item);
+            if (slot < 0)
+            {
+                return body;
+            }
+
+            var all = new List<ItemTooltipLine>(body);
+
+            foreach (IUnit filler in item.Items)
+            {
+                // A gem or rune has no stats of its own and is synthesised from gems.txt. A JEWEL
+                // does carry its own — its affixes are captured like any magic item's — and
+                // Contribution deliberately returns nothing for it rather than counting them twice.
+                // Its own modifier view is what belongs in its block.
+                SortedDictionary<int, int> contribution =
+                    _socketStats.Contribution(filler, slot);
+
+                bool carriesOwnStats = contribution.Count == 0;
+                if (carriesOwnStats)
+                {
+                    contribution = ItemStatReader.ReconstructView(filler, ItemStatView.Modifiers());
+                }
+
+                if (contribution.Count == 0)
+                {
+                    continue;
+                }
+
+                // The filler's own name, taken from its own render — a socket filler is a unit in
+                // its own right, which is what makes this a lookup rather than a special case.
+                Composed asItem = Compose(filler, viewer, TooltipOptions.Default, false);
+                string name = asItem.Sections.GetSection(ItemTooltipSection.ItemName);
+
+                if (!string.IsNullOrEmpty(name))
+                {
+                    // A blank row between blocks, so three gems do not read as one list. The game
+                    // never draws this section at all, so there is no append-order budget to spend
+                    // and no marker to emit — the row is a bare terminator.
+                    var gap = new ItemTooltipLine();
+                    gap.Text = asItem.Sections.LineTerminator ?? string.Empty;
+                    gap.Section = ItemTooltipSection.SocketContribution;
+                    gap.Color = ItemTooltipColor.SocketedOrEthereal;
+                    gap.EmitsColorMarker = false;
+                    all.Add(gap);
+
+                    var header = new ItemTooltipLine();
+                    header.Text = name;
+                    header.Section = ItemTooltipSection.SocketContribution;
+                    header.Color = ItemTooltipColor.SocketedOrEthereal;
+                    header.EmitsColorMarker = true;
+                    all.Add(header);
+                }
+
+                // Described through the same writers as any modifier block, so the text matches
+                // what the merged render would have shown — only the selection differs.
+                var composer = new ItemTooltipComposer(
+                    asItem.Sections, asItem.Sections.CreateModifierGenerator(contribution));
+
+                if (options.ShowRolledRanges)
+                {
+                    // A jewel's spans come from ITS OWN affixes, so it is ranged as the item it is.
+                    // A gem or rune is ranged from the gems.txt properties it lends the host —
+                    // which in shipped data never roll, so those blocks come out unannotated.
+                    composer.RangeAnnotation = carriesOwnStats
+                        ? BuildRangeAnnotation(filler, options)
+                        : BuildFillerRangeAnnotation(item, filler, slot, options);
+                    composer.RangeColor = options.RangeColor;
+                }
+
+                foreach (ItemTooltipLine line in composer.ComposeModifiersOnly(contribution))
+                {
+                    line.Section = ItemTooltipSection.SocketContribution;
+                    all.Add(line);
+                }
+            }
+
+            return all;
+        }
+
+        /// <summary>
+        /// The spans for EVERY filler at once, for the socket bucket of a breakdown — where the
+        /// lines are the fillers' union rather than one block per filler. A jewel's own affixes are
+        /// folded in, since those are what rolled.
+        /// </summary>
+        private Func<IReadOnlyList<int>, int, string> BuildSocketRangeAnnotation(
+            IUnit host, TooltipOptions options)
+        {
+            int slot = _socketStats.SlotFor(host);
+
+            var properties = new List<ItemProperty>();
+            var byKey = new Dictionary<int, RolledStatRange>();
+
+            if (slot >= 0)
+            {
+                foreach (IUnit filler in host.Items)
+                {
+                    properties.AddRange(_socketStats.FillerProperties(filler, slot));
+
+                    // A jewel contributes nothing through gems.txt; its own affixes are the roll,
+                    // so its reconstruction is merged in rather than skipped.
+                    if (_socketStats.Contribution(filler, slot).Count != 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (RolledStatRange range in Ranges(filler).Stats)
+                    {
+                        byKey[ItemStatReader.PackStatKey(range.Layer, range.StatId)] = range;
+                    }
+                }
+            }
+
+            ItemRollRanges gems = _ranges.Reconstruct(
+                ItemRecordReader.ReadIdentity(host), null, properties, null, false);
+
+            foreach (RolledStatRange range in gems.Stats)
+            {
+                byKey[ItemStatReader.PackStatKey(range.Layer, range.StatId)] = range;
+            }
+
+            return Lookup(byKey, options);
+        }
+
+        /// <summary>
+        /// The spans for ONE filler's own properties, so a jewel's roll is ranged against the
+        /// jewel's own lines rather than against the host's merged totals.
+        /// </summary>
+        private Func<IReadOnlyList<int>, int, string> BuildFillerRangeAnnotation(
+            IUnit host, IUnit filler, int slot, TooltipOptions options)
+        {
+            ItemRollRanges ranges = _ranges.Reconstruct(
+                ItemRecordReader.ReadIdentity(host),
+                null,
+                _socketStats.FillerProperties(filler, slot),
+                null,
+                false);
+
+            return Lookup(ByKey(ranges), options);
+        }
+
+        /// <summary>
+        /// Turns the reconstruction into the (layer, statId) lookup the composer wants. Built once
+        /// per render: the reconstruction applies every property twice, which is not work to repeat
+        /// per line.
+        /// </summary>
+        private static Dictionary<int, RolledStatRange> ByKey(ItemRollRanges ranges)
+        {
+            var byKey = new Dictionary<int, RolledStatRange>();
+            foreach (RolledStatRange range in ranges.Stats)
+            {
+                byKey[ItemStatReader.PackStatKey(range.Layer, range.StatId)] = range;
+            }
+
+            return byKey;
+        }
+
+        /// <summary>
+        /// The (stats, layer) callback the composer wants, over an already-built key map.
+        ///
+        /// Positions carry the meaning on a multi-stat line, so a PARTIAL answer is worse than none:
+        /// one span against "Adds 1-4 cold damage" reads as the whole line's, and the reader cannot
+        /// tell which half it came from. All or nothing.
+        /// </summary>
+        private static Func<IReadOnlyList<int>, int, string> Lookup(
+            Dictionary<int, RolledStatRange> byKey, TooltipOptions options)
+        {
+            Func<IReadOnlyList<RolledStatRange>, string> format =
+                options.RangeAnnotation ?? DefaultRangeAnnotation;
+
+            return (shownStats, layer) =>
+            {
+                var found = new List<RolledStatRange>();
+
+                foreach (int statId in shownStats)
+                {
+                    RolledStatRange range;
+                    if (byKey.TryGetValue(ItemStatReader.PackStatKey(layer, statId), out range))
+                    {
+                        found.Add(range);
+                    }
+                }
+
+                return found.Count != shownStats.Count || found.Count == 0 ? null : format(found);
+            };
+        }
+
+        /// <summary>
+        /// The default way a span is written: ` [5-15]`, and nothing at all for a stat that could
+        /// only have taken one value. A single end would read as a range of one.
+        /// </summary>
+        internal static string DefaultRangeAnnotation(IReadOnlyList<RolledStatRange> ranges)
+        {
+            if (ranges == null || ranges.Count == 0)
+            {
+                return null;
+            }
+
+            // Every stat a DescGrp line covers shares the one number the line prints, so their
+            // spans agree and repeating them would give "[(2-5)-(2-5)-(2-5)-(2-5)]".
+            bool identical = true;
+            for (int at = 1; at < ranges.Count && identical; ++at)
+            {
+                identical = ranges[at].DisplayLow == ranges[0].DisplayLow
+                    && ranges[at].DisplayHigh == ranges[0].DisplayHigh;
+            }
+
+            if (identical)
+            {
+                return ranges[0].IsRange ? " [" + Span(ranges[0]) + "]" : null;
+            }
+
+            // A min-max line prints two numbers, so it gets two spans: "[(1-2)-(3-5)]" reads as
+            // "the first number was 1..2, the second 3..5", which is the only honest single string
+            // for it. A degenerate half still appears, because dropping it would leave the reader
+            // unable to tell which half the surviving span belongs to.
+            var parts = new List<string>();
+            bool anyRange = false;
+            foreach (RolledStatRange range in ranges)
+            {
+                parts.Add("(" + Span(range) + ")");
+                anyRange = anyRange || range.IsRange;
+            }
+
+            return anyRange ? " [" + string.Join("-", parts.ToArray()) + "]" : null;
+        }
+
+        /// <summary>
+        /// One span, from the DECODED ends — so a charged skill reads as its charge count rather
+        /// than as the packed word it is stored in.
+        /// </summary>
+        private static string Span(RolledStatRange range)
+        {
+            return range.DisplayLow + "-" + range.DisplayHigh;
+        }
+
+        /// <summary>
+        /// <paramref name="includeSockets"/> must match what the LINES being annotated contain. The
+        /// merged render draws one line holding item plus fillers, so its span is the sum; a body
+        /// rendered with the fillers excluded — IncludeSockets false, or the separated mode — draws
+        /// the item's own value alone and must get the item's own span. Getting this backwards put
+        /// "Fire Resist +20% [16-30]" on a line whose 20 was the item's half only.
+        /// </summary>
+        private Func<IReadOnlyList<int>, int, string> BuildRangeAnnotation(
+            IUnit item, TooltipOptions options, bool includeSockets = true)
+        {
+            ItemRollRanges ranges = includeSockets
+                ? Ranges(item)
+                : _ranges.Reconstruct(
+                    ItemRecordReader.ReadIdentity(item),
+                    ItemStatReader.ReconstructView(item, ItemOwnMods()),
+                    null,
+                    null);
+
+            return Lookup(ByKey(ranges), options);
+        }
+
+        /// <summary>
+        /// The set state a viewer implies, so a caller never assembles bit masks by hand. Two
+        /// passes with DIFFERENT predicates, which is the whole reason this belongs in the library:
+        ///
+        /// OWNED — colours the piece list. GetSetItem 0x486770 accepts inventory grid types 1, 3
+        /// AND 4 (0x4867d4), so a piece on the alternate weapon set still counts and draws green.
+        ///
+        /// WORN — drives the bonus tiers. ITEMS_GetEquippedSetItemsMask requires grid type 3 alone
+        /// (0x62a3f0), so a swapped piece lights no bit. The bit is the piece's setitems slot
+        /// (0x62a474), not its body location.
+        ///
+        /// The grid type of a body item is INVENTORY_PlaceItemInGrid's `(bodyLoc >= 11) ? 4 : 3`
+        /// (0x63b1e2), and 11/12 are the swap pair (0x55f240) — which is what makes those two
+        /// predicates disagree at all.
+        ///
+        /// Anything carried but NOT equipped is treated as a plain carried grid, i.e. owned. Which
+        /// locations the game actually stamps as type 1 is UNTRACED, so a producer that puts stash
+        /// or cube contents in <see cref="IUnit.Items"/> gets them counted as owned; that affects
+        /// the piece list's colour only, never a bonus tier.
+        ///
+        /// No recursion: a filler is one level below a carried item and no set item is socketable.
+        /// </summary>
+        internal SetItemTooltipInput SetStateOf(IUnit item, IUnit viewer)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+
+            var input = new SetItemTooltipInput();
+            input.IsEquipped = item.Location == LocationEquipped;
+
+            SetItemRecord self = item.Quality == (int)ItemQuality.Set
+                ? Sets.PieceAt(item.FileIndex)
+                : null;
+
+            if (self == null || viewer == null)
+            {
+                return input;
+            }
+
+            var owned = new List<int>();
+            int worn = 0;
+
+            foreach (CarriedSetPiece carried in CarriedSetPieces(viewer))
+            {
+                if (carried.Piece.SetId != self.SetId)
+                {
+                    continue;
+                }
+
+                owned.Add(carried.Unit.FileIndex);
+
+                if (carried.Worn)
+                {
+                    worn |= 1 << carried.Piece.Slot;
+                }
+            }
+
+            // The hovered piece's own bit comes from the ITEM, not from the list. Nothing obliges a
+            // caller to repeat the hovered item inside the viewer's items — "what else the player
+            // is carrying" is the natural reading of a list passed ALONGSIDE the item — and taking
+            // the bit only from the list silently dropped a tier when they did not. OR is
+            // idempotent, so listing it as well changes nothing.
+            if (self.Slot >= 0 && IsWorn(item))
+            {
+                worn |= 1 << self.Slot;
+            }
+
+            if (!owned.Contains(item.FileIndex) && IsOwned(item))
+            {
+                owned.Add(item.FileIndex);
+            }
+
+            input.OwnedSetItemIds = owned;
+            input.WornMaskIncludingSelf = worn;
+
+            // Now a genuine inverse: self's bit is set above whenever it is worn, so clearing it
+            // here is the only difference between the two masks, by construction.
+            input.WornMaskExcludingSelf = self.Slot >= 0 ? worn & ~(1 << self.Slot) : worn;
+
+            return input;
+        }
+
+        /// <summary>
+        /// One carried set piece, with the OWNED / WORN distinction already made. Both derivations
+        /// walk the viewer the same way and differ only in which of the two they read, so the walk
+        /// and the two predicates live here once rather than being restated per caller.
+        /// </summary>
+        private sealed class CarriedSetPiece
+        {
+            public CarriedSetPiece(IUnit unit, SetItemRecord piece, bool worn)
+            {
+                Unit = unit;
+                Piece = piece;
+                Worn = worn;
+            }
+
+            public readonly IUnit Unit;
+            public readonly SetItemRecord Piece;
+
+            /// <summary>
+            /// Grid type 3, which is what the worn mask requires (0x62a3f0). Everything yielded here
+            /// is OWNED — GetSetItem takes types 1, 3 and 4 (0x4867d4) — so a piece on the alternate
+            /// weapon set arrives with this false and counts for the piece list but no bonus.
+            /// </summary>
+            public readonly bool Worn;
+        }
+
+        /// <summary>
+        /// GetSetItem's non-set tests: identified (0x4867a2) and on a page it walks
+        /// (0x4867b3-0x4867bf). Quality and the setitems lookup are the caller's part.
+        /// </summary>
+        private static bool IsOwned(IUnit unit)
+        {
+            return unit.Has(ItemRecordFlags.Identified) && OnAnOwningPage(unit.Location);
+        }
+
+        /// <summary>
+        /// What ITEMS_GetEquippedSetItemsMask counts: grid type 3 (0x62a3f0), which for a body item
+        /// is `bodyLoc &lt; 11` (0x63b1e2), and neither refused flag (0x62a446).
+        /// </summary>
+        private static bool IsWorn(IUnit unit)
+        {
+            return unit.Location == LocationEquipped
+                && GridTypeOfBodyItem(unit.X) == 3
+                && ((uint)unit.ItemFlags & BrokenOrUnequippable) == 0;
+        }
+
+        private IEnumerable<CarriedSetPiece> CarriedSetPieces(IUnit viewer)
+        {
+            foreach (IUnit carried in viewer.Items)
+            {
+                // GetSetItem 0x486770 takes quality 5 (0x486790) that is IDENTIFIED
+                // (CheckItemFlag 0x10, 0x4867a2). Every set item drops unidentified, so a sibling
+                // just picked up is the normal case and the game paints it red.
+                if (carried == null
+                    || carried.Quality != (int)ItemQuality.Set
+                    || !IsOwned(carried))
+                {
+                    continue;
+                }
+
+                SetItemRecord piece = Sets.PieceAt(carried.FileIndex);
+                if (piece == null || piece.Slot < 0)
+                {
+                    continue;
+                }
+
+                // The mask additionally refuses flag 0x100 and flag 0x4000 (0x62a446) — a broken
+                // piece grants no bonus even while worn, and it is already drawn red by name.
+                yield return new CarriedSetPiece(carried, piece, IsWorn(carried));
+            }
+        }
+
+        /// <summary>pItemData item location 1, the body. See <see cref="IUnit.Location"/>.</summary>
+        private const int LocationEquipped = 1;
+
+        /// <summary>
+        /// The mask's two refusals, 0x62a446. 0x4000 has no name in
+        /// <see cref="ItemRecordFlags"/> — <see cref="SocketStatSynthesis"/> spells it the same way
+        /// for the recalc loop's identical pair.
+        /// </summary>
+        private const uint BrokenOrUnequippable = (uint)ItemRecordFlags.Broken | 0x4000;
+
+        /// <summary>
+        /// Whether a location can hold a piece GetSetItem would find. It walks the viewer's
+        /// inventory and takes pages 0 / 3 / 4 / 0xFF (0x4867b3-0x4867bf), which excludes the TRADE
+        /// page; ground and store are not in that chain at all. The location-to-page mapping is by
+        /// name rather than traced, so only these three obvious exclusions are made — the rest fall
+        /// through as owned, which affects the piece list's colour and never a bonus tier.
+        /// </summary>
+        private static bool OnAnOwningPage(int location)
+        {
+            const int Ground = 0, Store = 4, Trade = 5;
+
+            return location != Ground && location != Store && location != Trade;
+        }
+
+        /// <summary>
+        /// INVENTORY_PlaceItemInGrid 0x63b1e2: `cmp bodyLoc, 0Bh / setnl cl / add cl, 3`, so a body
+        /// item is grid type 3 except on the alternate weapon set, which is 4.
+        /// </summary>
+        private static int GridTypeOfBodyItem(int bodyLocation)
+        {
+            return bodyLocation >= 11 ? 4 : 3;
         }
 
         /// <summary>
@@ -140,13 +614,13 @@ namespace D2ItemToolkit
         ///
         /// <paramref name="set"/> supplies only what the item's own record cannot: which siblings
         /// the viewer is carrying, the two worn masks, whether this piece is equipped, and the
-        /// full-set stat block. The piece names, their order, the set name, `add func` and the
-        /// partial-bonus stats are all derived here.
+        /// full-set stat block. <see cref="SetStateOf"/> works all of that out from a viewer, and is
+        /// what <see cref="Render"/> routes through — pass an input here only to force a state the
+        /// viewer does not actually have.
         ///
-        /// Throws when the item is not an identified set item; <see cref="Render"/> classifies for
-        /// you and routes to this automatically.
+        /// Throws when the item is not an identified set item.
         /// </summary>
-        public Tooltip RenderSetItem(
+        internal Tooltip RenderSetItem(
             IUnit item, SetItemTooltipInput set, IUnit viewer = null, TooltipOptions options = null)
         {
             if (item == null) throw new ArgumentNullException("item");
@@ -189,9 +663,9 @@ namespace D2ItemToolkit
             ItemIdentity identity = ItemRecordReader.ReadIdentity(item);
 
             // Only socket 0 is consulted, and only when it holds a gem.
-            ItemIdentity firstSocket = item.Sockets.Count == 0
+            ItemIdentity firstSocket = item.Items.Count == 0
                 ? null
-                : ItemRecordReader.ReadIdentity(item.Sockets[0]);
+                : ItemRecordReader.ReadIdentity(item.Items[0]);
 
             return new ItemAppearance(
                 _graphics.Resolve(identity),
@@ -280,13 +754,145 @@ namespace D2ItemToolkit
 
             TooltipOptions opts = options ?? TooltipOptions.Default;
 
+            // The item's own reconstruction annotates three of the four buckets. The SOCKET bucket
+            // gets its own, built from the fillers' properties, because the item's spans do not
+            // describe what a gem contributes — and for a jewel it is the jewel's own affixes that
+            // rolled.
+            Func<IReadOnlyList<int>, int, string> own = opts.ShowRolledRanges
+                ? BuildRangeAnnotation(item, opts, includeSockets: false)
+                : null;
+
+            Func<IReadOnlyList<int>, int, string> sockets = opts.ShowRolledRanges
+                ? BuildSocketRangeAnnotation(item, opts)
+                : null;
+
             return new TooltipBreakdown(
                 Describe(item, viewer, opts, ItemStatReader.ReconstructView(
-                    item, ItemStatView.BaseOnly())),
-                Describe(item, viewer, opts, ItemStatReader.ReconstructView(item, ItemOwnMods())),
-                Describe(item, viewer, opts, SocketContributions(item)),
+                    item, ItemStatView.BaseOnly()), own),
+                Describe(
+                    item, viewer, opts,
+                    ItemStatReader.ReconstructView(item, ItemOwnMods()), own),
+                Describe(item, viewer, opts, SocketContributions(item), sockets),
                 Describe(item, viewer, opts, ItemStatReader.ReconstructView(
-                    item, ItemStatView.SetBonuses(false))));
+                    item, ItemStatView.SetBonuses(false)), own));
+        }
+
+        /// <summary>
+        /// The span each of the item's stats could have rolled within, rebuilt from the tables its
+        /// own record points at — the affix ids it stores, its UniqueItems or SetItems row, its
+        /// runeword, its superior modifier and its socket fillers, plus the base Defense roll.
+        ///
+        /// Like <see cref="Breakdown"/> this is a capability the game does not have, so it cannot be
+        /// checked against the original. What it CAN be checked against is the item's own recorded
+        /// values, which must fall inside the spans claimed for them —
+        /// <see cref="ItemRollRanges.OutOfRange"/> is empty whenever that holds.
+        ///
+        /// Set BONUSES are excluded: they belong to the worn set rather than to this item, and
+        /// pass <paramref name="earnedSetIds"/> to fold them in.
+        /// </summary>
+        public ItemRollRanges Ranges(IUnit item, IEnumerable<int> earnedSetIds = null)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+
+            // Not equipped, matching Breakdown's socket view: an equipped host's fillers are
+            // discarded by recalc, which would drop the very properties being ranged.
+            return _ranges.Reconstruct(
+                ItemRecordReader.ReadIdentity(item),
+                ItemStatReader.ReconstructView(item, ItemOwnMods()),
+                AllSocketProperties(item),
+                earnedSetIds);
+        }
+
+        /// <summary>
+        /// The same reconstruction, with the earned sets taken FROM THE VIEWER rather than listed
+        /// by hand — the counterpart of <see cref="SetStateOf"/>, and sharing its worn-piece rule so
+        /// the two entry points cannot disagree about which tiers a character has.
+        ///
+        /// A set counts as earned once two of its pieces are worn, which is the point `add func`
+        /// 2 lights its first tier (0x4e65b2 gives N worn pieces tiers 0..N-2).
+        /// </summary>
+        public ItemRollRanges RangesForViewer(IUnit item, IUnit viewer)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+
+            return Ranges(item, EarnedSetIdsOf(viewer));
+        }
+
+        /// <summary>
+        /// Set ids the viewer wears at least two pieces of. Uses the worn predicate, not the owned
+        /// one: a piece on the alternate weapon set grants no bonus, so it must not raise the count.
+        /// </summary>
+        internal IReadOnlyList<int> EarnedSetIdsOf(IUnit viewer)
+        {
+            var earned = new List<int>();
+            if (viewer == null)
+            {
+                return earned;
+            }
+
+            // A MASK per set, not a count. The game ORs `1 << slot` (0x62a474), so two copies of the
+            // same piece light one bit and count once — and two rings is not a hypothetical: both
+            // Cathan's Seal and Angelic Halo are `rin`, and a character has two ring slots. Counting
+            // units instead would earn a tier off a single duplicated piece and put set-bonus spans
+            // on an item that has none.
+            var wornPerSet = new Dictionary<int, int>();
+
+            foreach (CarriedSetPiece carried in CarriedSetPieces(viewer))
+            {
+                if (!carried.Worn)
+                {
+                    continue;
+                }
+
+                int mask;
+                wornPerSet.TryGetValue(carried.Piece.SetId, out mask);
+                wornPerSet[carried.Piece.SetId] = mask | (1 << carried.Piece.Slot);
+            }
+
+            foreach (KeyValuePair<int, int> entry in wornPerSet)
+            {
+                if (SetBonusTiers.PopCount(entry.Value) >= 2)
+                {
+                    earned.Add(entry.Key);
+                }
+            }
+
+            earned.Sort();
+            return earned;
+        }
+
+        /// <summary>
+        /// What every filler contributes, as properties. A gem or rune lends the host its gems.txt
+        /// mods; a JEWEL lends its own affix rolls, which gems.txt knows nothing about.
+        ///
+        /// Both belong here because the merged render draws ONE line per stat holding the SUM — so
+        /// its span has to be the sum of both spans. Leaving the jewel out gave a line reading
+        /// "Fire Resist +28% [11-20]", where 28 was item plus jewel but 11-20 was the item alone.
+        /// </summary>
+        private List<ItemProperty> AllSocketProperties(IUnit item)
+        {
+            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item));
+
+            int slot = _socketStats.SlotFor(item);
+            if (slot < 0)
+            {
+                return properties;
+            }
+
+            foreach (IUnit filler in item.Items)
+            {
+                // A filler the synthesis has nothing to say about is one carrying its own stats,
+                // and its affixes are the roll.
+                if (_socketStats.Contribution(filler, slot).Count != 0)
+                {
+                    continue;
+                }
+
+                properties.AddRange(
+                    _ranges.OwnProperties(ItemRecordReader.ReadIdentity(filler)));
+            }
+
+            return properties;
         }
 
         /// <summary>
@@ -309,7 +915,7 @@ namespace D2ItemToolkit
         {
             var merged = new SortedDictionary<int, int>();
 
-            foreach (IUnit socket in ItemStatReader.EnumerateSockets(item))
+            foreach (IUnit socket in item.Items)
             {
                 AddInto(merged, ItemStatReader.ReconstructView(socket, ItemStatView.Modifiers()));
             }
@@ -336,7 +942,8 @@ namespace D2ItemToolkit
             IUnit item,
             IUnit viewer,
             TooltipOptions options,
-            SortedDictionary<int, int> selected)
+            SortedDictionary<int, int> selected,
+            Func<IReadOnlyList<int>, int, string> annotation = null)
         {
             Composed composed = Compose(item, viewer, options, true);
 
@@ -344,6 +951,12 @@ namespace D2ItemToolkit
             // block's colour carry match what a full render of the same stats would produce.
             var composer = new ItemTooltipComposer(
                 composed.Sections, composed.Sections.CreateModifierGenerator(selected));
+
+            if (annotation != null)
+            {
+                composer.RangeAnnotation = annotation;
+                composer.RangeColor = options.RangeColor;
+            }
 
             return composer.ComposeModifiersOnly(selected);
         }
@@ -529,6 +1142,56 @@ namespace D2ItemToolkit
 
         /// <summary>Appends the trailing quest-colour marker (0x48d1e2).</summary>
         public bool QuestColorPrefix;
+
+        /// <summary>
+        /// Annotates each stat line with the span it could have rolled within — the same numbers
+        /// <see cref="TooltipEngine.Ranges(IUnit, System.Collections.Generic.IEnumerable{int})"/>
+        /// returns, written inline.
+        ///
+        /// The game has no such mode, so this makes the output deliberately NOT byte-identical.
+        /// Off by default, which is why every existing render is unaffected.
+        ///
+        /// Only lines that display one stat are annotated: every modifier, plus the Defense line.
+        /// A stat with no span, or one whose value could only ever have been what it is, is left
+        /// alone rather than annotated with a degenerate range.
+        /// </summary>
+        public bool ShowRolledRanges;
+
+        /// <summary>
+        /// How a span is written when <see cref="ShowRolledRanges"/> is on. Null uses
+        /// <see cref="TooltipEngine.DefaultRangeAnnotation"/>, which gives ` [5-15]` for a
+        /// one-number line and ` [(1-2)-(3-5)]` for a line printing two.
+        ///
+        /// The list holds one entry per number the LINE prints, in print order, so a min-max damage
+        /// line arrives as two. Return null or empty to suppress one — which is how you show ranges
+        /// for some stats and not others.
+        /// </summary>
+        public Func<IReadOnlyList<RolledStatRange>, string> RangeAnnotation;
+
+        /// <summary>
+        /// The <see cref="ItemTooltipColor"/> to paint the annotation, or -1 to inherit the line's.
+        /// A marker restoring the line's own colour follows the annotation, so nothing after it is
+        /// affected. Only meaningful for the coloured text — <see cref="Tooltip.Text"/> strips no
+        /// markers, so they appear there too, exactly as the game's own embedded markers do.
+        ///
+        /// Defaults to the game's grey rather than to -1: a range is an annotation the game never
+        /// draws, so inheriting the stat line's blue made it read as part of the line. Grey is what
+        /// the game itself uses for secondary text, and it is distinct from every quality colour.
+        /// </summary>
+        public int RangeColor = ItemTooltipColor.SocketedOrEthereal;
+
+        /// <summary>
+        /// Renders the item WITHOUT what its fillers contribute, then one block per filler below it,
+        /// so a reader can tell which gem or rune is responsible for what.
+        ///
+        /// The game never draws this — it merges the fillers into the item's own block, which is
+        /// what <see cref="TooltipEngine.Render"/> does by default. Setting this implies
+        /// <see cref="IncludeSockets"/> false for the item's own lines; the fillers are not dropped
+        /// but moved. The blocks carry
+        /// <see cref="ItemTooltipSection.SocketContribution"/>, and combined with
+        /// <see cref="ShowRolledRanges"/> each filler's own spans appear against its own lines.
+        /// </summary>
+        public bool SeparateSocketContributions;
 
         /// <summary>
         /// The CLIENT PLAYER, when that is a different unit from the viewer — i.e. a mercenary's

@@ -171,6 +171,13 @@ static void __fastcall ITEMSTATS_StoreUnitIdentity(nlohmann::json& jUnit, D2Unit
 	char szPlayerName[17] = {};
 	memcpy(szPlayerName, pItemData->szPlayerName, 16);
 	jUnit[PlayerName] = szPlayerName;
+
+	// Where the item sits, which the consumer needs to tell a WORN set piece from a merely carried
+	// one. `x` is the grid column and, on the body, the equip location: 11 and 12 are the alternate
+	// weapon set, which INVENTORY_PlaceItemInGrid stamps as grid type 4 rather than 3, so a set
+	// piece on swap counts as owned but grants no bonus.
+	jUnit[Location] = int32_t(pItemData->ItemLocation);
+	jUnit[GridX]    = UNITS_GetXPosition(pUnit);
 }
 
 // Helper function. Collects the StatListEx children rather than descending, so the caller decides
@@ -214,9 +221,14 @@ nlohmann::json ITEMSTATS_StoreUnit(D2UnitStrc* pUnit)
 			return tKey(a) < tKey(b);
 		});
 
-	// Only an ITEM nests its contained units. A player's chain carries the same kind of extended
-	// child for every piece of equipment, and re-serialising the wearer's whole kit inside one item
-	// document would duplicate the very item being described.
+	// A WEARER's `items` would be the gear it carries, which is what lets a consumer derive set
+	// state instead of being handed bit masks. NOT IMPLEMENTED HERE: the statlist visitor only
+	// surfaces statlist children — equipped pieces — where the consumer needs the whole inventory,
+	// backpack and stash included, which means an INVENTORY_GetFirstItem / GetNextItem walk this
+	// example does not do. Until it does, a captured player carries no `items` and the consumer's
+	// set derivation sees an empty viewer. Emitting the equipped subset here would be worse than
+	// nothing: it would light the piece list green for exactly the pieces already worn and leave
+	// every carried sibling red, which is a plausible-looking wrong answer.
 	if (pUnit->dwUnitType != UNIT_ITEM || tContained.empty())
 	{
 		return jUnit;
@@ -231,13 +243,13 @@ nlohmann::json ITEMSTATS_StoreUnit(D2UnitStrc* pUnit)
 			return UNITS_GetXPosition(a) < UNITS_GetXPosition(b);
 		});
 
-	nlohmann::json jSockets = nlohmann::json::array();
+	nlohmann::json jItems = nlohmann::json::array();
 	for (D2UnitStrc* pFiller : tContained)
 	{
-		jSockets.push_back(ITEMSTATS_StoreUnit(pFiller));
+		jItems.push_back(ITEMSTATS_StoreUnit(pFiller));
 	}
 
-	jUnit[Sockets] = std::move(jSockets);
+	jUnit[Items] = std::move(jItems);
 
 	return jUnit;
 }

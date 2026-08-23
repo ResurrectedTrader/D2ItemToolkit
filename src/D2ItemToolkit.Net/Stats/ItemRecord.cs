@@ -25,6 +25,13 @@ namespace D2ItemToolkit
         public int Quality;
         public ItemRecordFlags Flags;
         public int FileIndex = -1;
+
+        /// <summary>
+        /// dwItemLevel, or -1 when the capture did not record it. See <see cref="IUnit.ItemLevel"/>
+        /// for what depends on it; every reader of this must handle -1, because most captures have
+        /// none and the property handlers that want it report themselves instead of guessing.
+        /// </summary>
+        public int ItemLevel = -1;
         public int RarePrefix;
         public int RareSuffix;
         public int AutoAffix;
@@ -49,7 +56,7 @@ namespace D2ItemToolkit
     }
 
     /// <summary>
-    /// A whole item unit — identity, its OWN stats, and its own sockets. The unit document is
+    /// A whole item unit — identity, its OWN stats, and whatever it contains. The unit document is
     /// self-similar, so a socket filler has exactly this shape too, which is what
     /// ITEM_CalcRequiredLevel's recursion at 0x62b901 walks.
     /// </summary>
@@ -57,16 +64,16 @@ namespace D2ItemToolkit
     {
         public readonly ItemIdentity Identity;
         public readonly IDictionary<int, int> Stats;
-        public readonly IList<ItemUnit> Sockets;
+        public readonly IList<ItemUnit> Items;
 
         public ItemUnit(
             ItemIdentity identity,
             IDictionary<int, int> stats = null,
-            IList<ItemUnit> sockets = null)
+            IList<ItemUnit> items = null)
         {
             Identity = identity;
             Stats = stats ?? new Dictionary<int, int>();
-            Sockets = sockets;
+            Items = items;
         }
     }
 
@@ -148,6 +155,7 @@ namespace D2ItemToolkit
             identity.Quality = record.Quality;
             identity.Flags = record.ItemFlags;
             identity.FileIndex = record.FileIndex;
+            identity.ItemLevel = record.ItemLevel;
             identity.RarePrefix = record.RarePrefix;
             identity.RareSuffix = record.RareSuffix;
             identity.AutoAffix = record.AutoAffix;
@@ -176,7 +184,7 @@ namespace D2ItemToolkit
         {
             var units = new List<ItemUnit>();
 
-            foreach (IUnit socket in ItemStatReader.EnumerateSockets(record))
+            foreach (IUnit socket in record.Items)
             {
                 units.Add(
                     new ItemUnit(
@@ -203,7 +211,7 @@ namespace D2ItemToolkit
             viewer.ClassId = player.ClassId;
 
             var stats = new Dictionary<int, int>();
-            foreach (ItemStatGroup group in ItemStatReader.EnumerateGroups(player))
+            foreach (ItemStatGroup group in ItemStatReader.EnumerateOwnGroups(player))
             {
                 // On pMyStats rather than pMyLastList, so it is not contributing.
                 if ((group.Flags & ItemStatListFlags.Set) != 0)

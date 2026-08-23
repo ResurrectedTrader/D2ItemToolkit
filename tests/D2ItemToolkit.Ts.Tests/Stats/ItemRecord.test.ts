@@ -136,7 +136,7 @@ const Nested = `{
       { "stateNo": 0, "flags": 2147483648,
         "stats": [ { "id": 31, "value": 100 } ] }
     ],
-    "sockets": [
+    "items": [
       { "classId": 620, "quality": 2,
         "statsLists": [ { "source": "quality", "stateNo": 0, "flags": 64,
             "stats": [ { "id": 39, "value": 10 } ] } ] },
@@ -211,7 +211,7 @@ describe('nested sockets', () => {
   it('an item with no sockets omits the array entirely', () => {
     const bare = parse('{ "classId": 1, "statsLists": [] }');
 
-    expect([...ItemStatReader.enumerateSockets(bare)]).toHaveLength(0);
+    expect([...bare.items]).toHaveLength(0);
     expect(ItemStatReader.readSockets(bare).size).toBe(0);
   });
 
@@ -221,14 +221,14 @@ describe('nested sockets', () => {
     expect(units).toHaveLength(2);
     expect(units[0]?.identity.classId).toBe(620);
     expect(units[0]?.stats.get(ItemStatReader.packStatKey(0, 39))).toBe(10);
-    expect(units[1]?.sockets).toHaveLength(0);
+    expect(units[1]?.items).toHaveLength(0);
   });
 });
 
 /** Indexing is `Unit | undefined` under noUncheckedIndexedAccess; a missing filler is a
  * broken fixture, so say so rather than letting an empty record render a plausible nothing. */
 function socketAt(record: Unit, index: number): Unit {
-  const filler = ItemStatReader.enumerateSockets(record)[index];
+  const filler = record.items[index];
   if (filler === undefined) {
     throw new Error(`the fixture has no socket ${String(index)}`);
   }

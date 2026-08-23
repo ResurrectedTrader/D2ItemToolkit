@@ -521,10 +521,10 @@ namespace D2ItemToolkit
         {
             var tier = new SortedDictionary<int, int>();
 
-            foreach (ItemStatGroup group in ItemStatReader.EnumerateGroups(record))
+            // The wearer's OWN chain: EnumerateGroups would descend into the gear it carries.
+            foreach (ItemStatGroup group in ItemStatReader.EnumerateOwnGroups(record))
             {
-                if (group.FromSocket
-                    || group.StateNo != state
+                if (group.StateNo != state
                     || (group.Flags & ItemStatListFlags.Set) != 0)
                 {
                     continue;

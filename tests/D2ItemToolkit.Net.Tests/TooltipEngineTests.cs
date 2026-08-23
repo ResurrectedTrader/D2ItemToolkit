@@ -25,7 +25,7 @@ namespace D2ItemToolkit.Tests
             { ""stateNo"": 0, ""flags"": 64,
               ""stats"": [ { ""id"": 16, ""value"": 150 }, { ""id"": 39, ""value"": 25 },
                            { ""id"": 80, ""value"": 30 } ] } ],
-          ""sockets"": [
+          ""items"": [
             { ""unitType"": 4, ""classId"": 604,
               ""statsLists"": [ { ""stateNo"": 0, ""flags"": 64,
                                   ""stats"": [ { ""id"": 39, ""value"": 38 } ] } ] } ]
@@ -230,7 +230,7 @@ namespace D2ItemToolkit.Tests
             socket.UnitType = 4;
             socket.ClassId = 604;
             socket.StatsLists.Add(new UnitStatList(0, ItemStatListFlags.Magic).Add(39, 38));
-            item.Sockets.Add(socket);
+            item.Items.Add(socket);
 
             Assert.Equal(
                 TooltipEngine.Embedded.Render(Item(), Player()).Text,
@@ -478,6 +478,7 @@ namespace D2ItemToolkit.Tests
             public int Quality { get { return ItemQualityNo.Magic; } }
             public ItemRecordFlags ItemFlags { get { return ItemRecordFlags.Identified; } }
             public int FileIndex { get { return -1; } }
+            public int ItemLevel { get { return -1; } }
             public int RarePrefix { get { return 0; } }
             public int RareSuffix { get { return 0; } }
             public int AutoAffix { get { return 0; } }
@@ -511,7 +512,11 @@ namespace D2ItemToolkit.Tests
 
             public IReadOnlyList<IUnitStat> Stats { get { return new IUnitStat[0]; } }
 
-            public IReadOnlyList<IUnit> Sockets { get { return new IUnit[0]; } }
+            public IReadOnlyList<IUnit> Items { get { return new IUnit[0]; } }
+
+            public int Location { get { return -1; } }
+
+            public int X { get { return 0; } }
 
             // NOT empty, and NOT UnitSkill. ReadViewer used to iterate this as `foreach
             // (UnitSkill ...)`, which compiles — foreach inserts a downcast — and threw
@@ -597,6 +602,7 @@ namespace D2ItemToolkit.Tests
             public int Quality { get { return ItemQualityNo.Magic; } }
             public ItemRecordFlags ItemFlags { get { return ItemRecordFlags.Identified; } }
             public int FileIndex { get { return -1; } }
+            public int ItemLevel { get { return -1; } }
             public int RarePrefix { get { return 0; } }
             public int RareSuffix { get { return 0; } }
             public int AutoAffix { get { return 0; } }
@@ -609,7 +615,11 @@ namespace D2ItemToolkit.Tests
             public uint FlagsEx { get { return Unit.UnitFlagExpansion; } }
             public IReadOnlyList<IUnitStatList> StatsLists { get { return new IUnitStatList[0]; } }
             public IReadOnlyList<IUnitStat> Stats { get { return new IUnitStat[0]; } }
-            public IReadOnlyList<IUnit> Sockets { get { return new IUnit[0]; } }
+            public IReadOnlyList<IUnit> Items { get { return new IUnit[0]; } }
+
+            public int Location { get { return -1; } }
+
+            public int X { get { return 0; } }
             public IReadOnlyList<IUnitSkill> Skills { get { return new IUnitSkill[0]; } }
         }
 
@@ -792,7 +802,7 @@ namespace D2ItemToolkit.Tests
             Unit unit = Unit.FromJson(
                 @"{ ""code"": null, ""playerName"": null, ""magicPrefix"": null,
                     ""magicSuffix"": null, ""statsLists"": null, ""stats"": null,
-                    ""sockets"": null, ""skills"": null }");
+                    ""items"": null, ""skills"": null }");
 
             Assert.Equal(string.Empty, unit.Code);
             Assert.Equal(string.Empty, unit.PlayerName);
@@ -800,7 +810,7 @@ namespace D2ItemToolkit.Tests
             Assert.Equal(new[] { 0, 0, 0 }, unit.MagicSuffix);
             Assert.Empty(unit.StatsLists);
             Assert.Empty(unit.Stats);
-            Assert.Empty(unit.Sockets);
+            Assert.Empty(unit.Items);
             Assert.Empty(unit.Skills);
 
             // And it renders rather than throwing.
@@ -847,7 +857,7 @@ namespace D2ItemToolkit.Tests
             Unit item = Unit.FromJson(
                 @"{ ""unitType"": 4, ""classId"": 330, ""quality"": 2, ""itemFlags"": 16,
                     ""statsLists"": [],
-                    ""sockets"": [
+                    ""items"": [
                       { ""unitType"": 4, ""classId"": 604, ""statsLists"": [
                         { ""stateNo"": 0, ""flags"": 64,
                           ""stats"": [ { ""id"": 39, ""value"": 2147483647 } ] } ] },

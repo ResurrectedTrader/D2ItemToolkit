@@ -23,7 +23,7 @@ describe('socket stat synthesis', () => {
       quality: 2,
       itemFlags: 2064,
       statsLists: [],
-      sockets: fillerCodes.map(code => ({ unitType: 4, classId: classId(code) })),
+      items: fillerCodes.map(code => ({ unitType: 4, classId: classId(code) })),
     });
 
   const render = (item: Unit): string => TooltipEngine.embedded.render(item).text;
@@ -70,7 +70,7 @@ describe('socket stat synthesis', () => {
       quality: 2,
       itemFlags: 2064,
       statsLists: [],
-      sockets: [
+      items: [
         {
           unitType: 4,
           classId: classId('r18'),
@@ -103,7 +103,7 @@ describe('socket stat synthesis', () => {
       itemFlags: 2064,
       fileIndex: 80,
       statsLists: [],
-      sockets: [{ unitType: 4, classId: classId('r22') }],
+      items: [{ unitType: 4, classId: classId('r22') }],
     });
 
     expect(TooltipEngine.embedded.renderSetItem(worn, { isEquipped: true }).text).not.toContain(

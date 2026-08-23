@@ -55,9 +55,21 @@ export class D2DataFiles {
   readonly rareSuffix: TxtFile | null;
   readonly rarePrefix: TxtFile | null;
   readonly lowQualityItems: TxtFile | null;
+
+  /**
+   * The superior counterpart of lowqualityitems.txt. Unlike that file it carries the rolled
+   * ranges, so a superior item's modifiers can be attributed to a row.
+   */
+  readonly qualityItems: TxtFile | null;
   readonly charStats: TxtFile | null;
   readonly gems: TxtFile | null;
   readonly runes: TxtFile | null;
+
+  /**
+   * Holds the fixed mods a crafted recipe adds on top of its random affixes, with their ranges —
+   * the only place those ranges are recorded.
+   */
+  readonly cubeMain: TxtFile | null;
   readonly experience: TxtFile | null;
   readonly properties: TxtFile | null;
   readonly skillRows: TxtFile | null;
@@ -200,9 +212,11 @@ export class D2DataFiles {
     this.rareSuffix = optional(excel, 'RareSuffix.txt');
     this.rarePrefix = optional(excel, 'RarePrefix.txt');
     this.lowQualityItems = optional(excel, 'lowqualityitems.txt');
+    this.qualityItems = optional(excel, 'qualityitems.txt');
     this.charStats = optional(excel, 'charstats.txt');
     this.gems = optional(excel, 'gems.txt');
     this.runes = optional(excel, 'Runes.txt');
+    this.cubeMain = optional(excel, 'cubemain.txt');
     this.colors = optional(excel, 'colors.txt');
     this.experience = optional(excel, 'Experience.txt');
     this.properties = optional(excel, 'Properties.txt');
@@ -465,6 +479,7 @@ export class TxtSkillTable implements ISkillTable {
   private readonly _names: (string | null)[];
   private readonly _classes: number[];
   private readonly _requiredLevels: number[];
+  private readonly _maxLevels: number[];
   private readonly _sentinel: string | null;
   private readonly _classCodes: readonly string[];
 
@@ -483,6 +498,12 @@ export class TxtSkillTable implements ISkillTable {
     const hasReqLevel = skills.hasColumn('reqlevel');
     for (let row = 0; row < skills.rowCount; ++row) {
       this._requiredLevels[row] = hasReqLevel ? skills.getInt(row, 'reqlevel') : 0;
+    }
+
+    this._maxLevels = new Array<number>(skills.rowCount).fill(0);
+    const hasMaxLevel = skills.hasColumn('maxlvl');
+    for (let row = 0; row < skills.rowCount; ++row) {
+      this._maxLevels[row] = hasMaxLevel ? skills.getInt(row, 'maxlvl') : 0;
     }
 
     this._sentinel = strings.getByIndex(DescStringIds.DescStr2Sentinel);
@@ -574,6 +595,22 @@ export class TxtSkillTable implements ISkillTable {
     return skillId >= 0 && skillId < this._requiredLevels.length
       ? (this._requiredLevels[skillId] as number)
       : -1;
+  }
+
+  /**
+   * SKILL_GetMaxLevelForSkill 0x4aa8b0 — skills.txt "maxlvl" (+0x12C), falling back to **20** both
+   * when the column is non-positive and when the id is out of range (0x4aa8d9). The fallback is the
+   * value, not an error code, so this never returns -1.
+   */
+  maxLevel(skillId: number): number {
+    const fallback = 20;
+
+    if (skillId < 0 || skillId >= this._maxLevels.length) {
+      return fallback;
+    }
+
+    const value = this._maxLevels[skillId] as number;
+    return value > 0 ? value : fallback;
   }
 }
 

@@ -111,13 +111,13 @@ larger corpus.
 
 ```bash
 # C#
-dotnet test                                  # 920 tests
+dotnet test                                  # 1034 tests
 dotnet run --project tools/RecordSmoke
 dotnet run --project tools/DataSmoke         # optional: -- <excelDir> <localeDir>
 
 # TypeScript (npm workspaces, rooted at the repository)
 npm ci                                       # also generates the embedded data blob
-npm test                                     # 930 tests, including the differential
+npm test                                     # 1051 tests, including the differential
 npm run test:adversarial                     # 11,972 producer-legal hostile cases, opt-in
 npm run typecheck
 npm run lint                                 # ESLint, type-aware; --max-warnings 0
@@ -129,7 +129,8 @@ dotnet jb inspectcode D2ItemToolkit.sln --output=obj/inspect.sarif --format=Sari
 ```
 
 `npm ci` runs the package's `prepare`, which regenerates `src/D2ItemToolkit.Ts/src/Data/
-EmbeddedDataBlob.ts` from `data/` — a gzipped container of all 32 tables, **generated and
+EmbeddedDataBlob.ts` from `data/` — a gzipped container of all 37 files (33 excel, 3 locale, 1
+global), **generated and
 gitignored**, so the package works from a published install and in a browser. `fflate` is the one
 runtime dependency; its inflate is synchronous, which is what lets `D2DataFiles.load()` keep the
 signature the whole suite already uses. Regenerate with `npm run generate:data` after touching
@@ -219,3 +220,50 @@ Do not relitigate these without new evidence:
   dexterity, energy, vitality and level, which bypasses the `STATLIST_DYNAMIC` skip in
   `STATLIST_CalcFullStatFromChildren`. Any `damagerelated` stat does hit that skip. Do not extend
   the summing site to one.
+- **`itemLevel` is optional and −1 means absent.** No tooltip WRITER reads it. It exists for the
+  property handlers that derive a value from the item's level — funcs 11 and 19 with a non-positive
+  max, and func 14's MaxSock tier — which report themselves through `ItemLevelDependent` when it is
+  missing rather than guessing. Do not default it to 0: 0 is below the game's own floor of 1 and
+  would read as a real level.
+- **Roll ranges come from running the handlers twice, not from arithmetic.** `RollEnd` forces every
+  range to its low or high end and the reconstruction diffs the two stat dictionaries. That is why
+  func 7's truncation (0..15, not 5..15) and func 18's packed triple come out right without special
+  cases. Do not "simplify" it into min/max arithmetic over the table columns.
+- **A stat written at only one end has value 0 at the other**, because a zero value writes nothing
+  (0x65ea63). That is NOT a layer roll. Funcs 12 and 36 are the layer-rolling pair and are detected
+  by their func number, reported as a span of layers around one fixed value.
+- **A crafted item's recipe is found by SLOT, never by `input 1`'s base code.** That cell is not a
+  plain item code: three of the 36 rows name a type with no item of that code (`blun`, `rod`,
+  `spea`), `amul` and `ring` are likewise types whose items are `amu` and `rin`, and 24 carry a
+  trailing `upg` whose meaning is untraced. `axe` is NOT a fourth type-only case — weapons.txt row 3
+  is the Axe, code `axe`, so that recipe resolves through the item-code branch and lands on the same
+  `weap` slot the type branch would. Slot matching sidesteps every one of those, because the recipes
+  are 4 families × 9 slots with one row per pair, so the answer is the same under any reading of the
+  cell. Do not "improve" it into base-code matching — that silently loses every weapon, amulet and
+  ring. The candidate filter is **every** stat key the recipe writes, not the first two mods; the
+  families being disjoint on their first two is a data-drift canary a test pins, not the mechanism.
+  `CraftSlots` uses `shie` and not `shld` deliberately: the four shield recipes name item codes
+  whose whole upgrade chain is `shie`, and `ashd` / `head` are SIBLINGS of `shie` under `shld`, so
+  no reading of the cell reaches a class shield and `shld` would claim 30 uncraftable items are
+  identifiable. The cube's actual `input 1` semantics stay open, but cost nothing — slot derivation
+  is tier-invariant, so `upg` cannot change an answer. See `docs/writers.md`.
+- **Set state is DERIVED from the viewer, never handed over as masks.** `TooltipEngine.SetStateOf`
+  walks `IUnit.Items` once and makes the distinction a caller cannot: GetSetItem takes grid types
+  1, 3 and 4 (0x4867d4) so a piece on the alternate weapon set is OWNED and green, while the worn
+  mask takes type 3 alone (0x62a3f0) so it lights no bit. A body item's type is
+  `(bodyLoc >= 11) ? 4 : 3` (0x63b1e2), and `x` carries that location. `EarnedSetIdsOf` shares the
+  same walk so `Ranges` and `Render` cannot disagree about which tiers are earned. `RenderSetItem`
+  keeps its explicit input, for forcing a state the viewer does not have.
+- **`IUnit.Items` is one FIELD carrying two relations** — socket fillers on an item, carried gear on
+  a wearer — and the claim that "nothing has to tell them apart" was wrong. `EnumerateGroups`
+  RECURSES, because a filler's stats are part of what the item grants; run a wearer through it and
+  every carried item's stats fold into the viewer's attributes, so a charm in the backpack meets a
+  requirement the character does not. Anything reading a PLAYER must use `EnumerateOwnGroups`. The
+  Horadric Cube is the other case that would break the merge — an item holding items at a filler's
+  depth — and is not modelled.
+- **`IsEquipped` is derived from `Location`, and that IS a substitution.** The full-set block is
+  gated on `dwAnimMode == 1` (0x48d870); the capture has no animMode, so `SetStateOf` uses
+  `Location == 1` instead. Whether the two fields always agree is UNTRACED. Do not "correct" this
+  back to a refusal — an earlier comment forbade the substitution while the code performed it, and
+  following that rule re-breaks the full-set block, which was dead on the Render path until this
+  landed. If animMode ever reaches the wire, prefer it.

@@ -18,6 +18,7 @@ interface ExpectedCase {
   lines?: { section: string; color: number; text: string }[];
   rendered?: string;
   colored?: string;
+  ranges?: unknown;
   error?: string;
 }
 
@@ -69,6 +70,11 @@ describe('the two implementations agree on the adversarial corpus', () => {
         'lines',
         'rendered',
         'colored',
+        // The reconstruction, which the shipped corpus compares but this one did not — so the
+        // property handlers it reaches were policed only by cases built from the same tables they
+        // read. These records are hostile, so this is where a handler that survives a legal roll
+        // but not an implausible one shows up.
+        'ranges',
         'error',
       ] as const) {
         const a = JSON.stringify(want[layer] ?? null);

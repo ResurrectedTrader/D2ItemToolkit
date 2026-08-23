@@ -30,7 +30,7 @@ const Record = unitFromJson(`{
     { "stateNo": 165, "flags": 8256,
       "stats": [ { "id": 0, "value": 20 } ] }
   ],
-  "sockets": [
+  "items": [
     { "classId": 620,
       "statsLists": [ { "stateNo": 0, "flags": 64,
         "stats": [ { "id": 17, "value": 15 }, { "id": 97, "layer": 2, "value": 1 } ] } ] },
@@ -121,7 +121,7 @@ describe('reader to description', () => {
 /** Indexing is `Unit | undefined` under noUncheckedIndexedAccess; a missing filler is a
  * broken fixture, so say so rather than letting an empty record render a plausible nothing. */
 function socketAt(record: Unit, index: number): Unit {
-  const filler = ItemStatReader.enumerateSockets(record)[index];
+  const filler = record.items[index];
   if (filler === undefined) {
     throw new Error(`the fixture has no socket ${String(index)}`);
   }

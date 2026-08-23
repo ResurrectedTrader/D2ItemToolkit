@@ -480,12 +480,9 @@ export class SetItemTooltipBuilder {
   private static enabledTier(record: Unit, state: number): Map<number, number> {
     const tier = new Map<number, number>();
 
-    for (const group of ItemStatReader.enumerateGroups(record)) {
-      if (
-        group.fromSocket ||
-        group.stateNo !== state ||
-        (group.flags & ItemStatListFlags.Set) !== 0
-      ) {
+    // The wearer's OWN chain: enumerateGroups would descend into the gear it carries.
+    for (const group of ItemStatReader.enumerateOwnGroups(record)) {
+      if (group.stateNo !== state || (group.flags & ItemStatListFlags.Set) !== 0) {
         continue;
       }
 

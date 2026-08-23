@@ -36,12 +36,12 @@ export const ItemStatListStates = {
 } as const;
 
 export class ItemStatReader {
-  // A unit document is self-similar: identity fields, `statsLists` and `sockets`,
+  // A unit document is self-similar: identity fields, `statsLists` and `items`,
   // where each socket entry is another unit document and its POSITION is the socket index. An
   // item and a player are both D2UnitStrc, so both serialise to this same shape.
   //
   // There is no per-socket view, and no socket index anywhere: to describe one filler, take
-  // [...enumerateSockets(record)][n] and view THAT record with itemOnly(). Self-similarity means
+  // record.items[n] and view THAT record with itemOnly(). Self-similarity means
   // the whole reader already works on it.
 
   // (layer << 16) | stat — LAYER-major, which is the MIRROR of the engine's own packing.
@@ -108,7 +108,7 @@ export class ItemStatReader {
   }
 
   /**
-   * This record's own groups followed by its sockets', each tagged with whether it was reached
+   * This record's own groups followed by its fillers', each tagged with whether it was reached
    * through a socket so a view can drop the fillers.
    */
   static enumerateGroups(record: Unit): IterableIterator<ItemStatGroup> {
@@ -116,18 +116,28 @@ export class ItemStatReader {
   }
 
   /**
+   * This record's OWN groups, without descending into `items`.
+   *
+   * The recursion belongs to the SOCKET relation: a filler's stats are part of what the item
+   * grants, so folding them in is right. `items` carries the other relation too — a wearer's carried
+   * gear — and those stats are emphatically NOT the wearer's. Anything reading a PLAYER wants this
+   * one; anything reading an item wants the other.
+   */
+  static *enumerateOwnGroups(record: Unit): IterableIterator<ItemStatGroup> {
+    for (const group of record.statsLists) {
+      yield new ItemStatGroup(group, false);
+    }
+  }
+
+  /**
    * The socket records in index order. Position IS the index: the producer sorts by the
    * ordinal INVENTORY_PlaceItemInSocket assigned, which is contiguous from 0.
    */
-  static enumerateSockets(record: Unit): readonly Unit[] {
-    return record.sockets;
-  }
-
   /** Socket index to the filler's classId, for the writers that only need that. */
   static readSockets(record: Unit): Map<number, number> {
     const sockets = new Map<number, number>();
     let index = 0;
-    for (const socket of ItemStatReader.enumerateSockets(record)) {
+    for (const socket of record.items) {
       // The document's two fallbacks for a missing classId differ: identity wants -1 ("no
       // such row"), this map wants 0. Keep the 0 — a negative would widen to 0xFFFFFFFF.
       sockets.set(index, socket.classId < 0 ? 0 : socket.classId >>> 0);
@@ -148,7 +158,7 @@ function* enumerateGroupsOf(record: Unit, fromSocket: boolean): IterableIterator
     yield new ItemStatGroup(group, fromSocket);
   }
 
-  for (const socket of ItemStatReader.enumerateSockets(record)) {
+  for (const socket of record.items) {
     for (const group of enumerateGroupsOf(socket, true)) {
       yield group;
     }

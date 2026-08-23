@@ -518,7 +518,7 @@ namespace D2ItemToolkit.Tests
                     ""classId"": " + classId + @", ""quality"": 2,
                                 ""itemFlags"": " + (16 | 0x800 | 0x04000000) + @",
                     ""statsLists"": [],
-                    ""sockets"": [ { ""classId"": " + ral + @" },
+                    ""items"": [ { ""classId"": " + ral + @" },
                                    { ""classId"": " + amn + @" } ] }",
                 out lines);
 

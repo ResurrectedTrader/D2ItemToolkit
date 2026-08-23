@@ -2,7 +2,7 @@ import type { D2DataFiles } from '../Tables/TxtDataProviders.js';
 import type { ItemTable } from '../Tables/ItemTable.js';
 import type { ItemTypeTree } from '../Tables/ItemTypeTree.js';
 import { GemTable } from '../Tables/GemTable.js';
-import { PropertyApplier } from './PropertyApplier.js';
+import { PropertyApplier, type ItemProperty } from './PropertyApplier.js';
 import { ItemStatReader, ItemStatView } from './ItemStatReader.js';
 import { ItemRecordFlags, ItemRecordReader } from './ItemRecord.js';
 import { ItemQualityNo } from '../Tooltip/ItemNameBuilder.js';
@@ -112,7 +112,7 @@ export class SocketStatSynthesis {
       return merged;
     }
 
-    for (const filler of ItemStatReader.enumerateSockets(host)) {
+    for (const filler of host.items) {
       // One level only: a jewel cannot itself hold sockets, so vanilla never nests further, and
       // the game applies the filler to its immediate host.
       for (const [key, value] of this.contribution(filler, slot)) {
@@ -125,9 +125,110 @@ export class SocketStatSynthesis {
   }
 
   /**
-   * One filler's contribution to a host with this gemapplytype, or empty when the filler already
-   * carries stats, is not a gem or rune, or has no gems.txt row.
+   * items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
+   * (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
    */
+  slotFor(host: Unit | null, hostIsEquipped = false): number {
+    if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {
+      return -1;
+    }
+
+    const slot = this.items.getInt(host.classId, 'gemapplytype');
+    return slot >= 0 && slot <= 2 ? slot : -1;
+  }
+
+  /**
+   * ONE filler's properties, so a caller can range or describe each socket separately rather than as
+   * the union `contributions` returns.
+   */
+  fillerPropertiesOf(filler: Unit | null, slot: number): ItemProperty[] {
+    const found: ItemProperty[] = [];
+
+    if (slot < 0 || slot > 2) {
+      return found;
+    }
+
+    const row = this.fillerRow(filler);
+    if (row < 0) {
+      return found;
+    }
+
+    for (const property of this.gems.properties(row, slot)) {
+      if (property.propertyId < 0) {
+        break;
+      }
+
+      found.push(property);
+    }
+
+    return found;
+  }
+
+  /**
+   * The gem/rune properties every filler would apply, before any of them is rolled — the same
+   * selection {@link contributions} applies, exposed so a range reconstruction can run them at both
+   * ends instead of once.
+   *
+   * **No gems.txt cell actually rolls.** The three whose min differs from their max are `dmg-fire`,
+   * `dmg-ltng` and `dmg-cold` on the Ral, Ort and Thul runes, and those are funcs 15 and 16 — the
+   * two ENDS of a damage range, both fixed, read as separate parameters exactly as funcs 11 and 19
+   * read theirs. So a gem or rune contributes no span at all; a socketed JEWEL does, but from its
+   * own affixes rather than from here.
+   */
+  fillerProperties(host: Unit | null, hostIsEquipped = false): ItemProperty[] {
+    const found: ItemProperty[] = [];
+
+    if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {
+      return found;
+    }
+
+    const slot = this.items.getInt(host.classId, 'gemapplytype');
+    if (slot < 0 || slot > 2) {
+      return found;
+    }
+
+    for (const filler of host.items) {
+      const row = this.fillerRow(filler);
+      if (row < 0) {
+        continue;
+      }
+
+      for (const property of this.gems.properties(row, slot)) {
+        if (property.propertyId < 0) {
+          break;
+        }
+
+        found.push(property);
+      }
+    }
+
+    return found;
+  }
+
+  /**
+   * The gems.txt row a filler applies from, or -1 when it carries its own stats, is not a gem or
+   * rune, or has no row. The same three gates {@link contribution} applies.
+   */
+  private fillerRow(filler: Unit | null): number {
+    if (
+      filler === null ||
+      ItemStatReader.reconstructView(filler, ItemStatView.modifiers()).size !== 0
+    ) {
+      return -1;
+    }
+
+    const identity = ItemRecordReader.readIdentity(filler);
+
+    const primary = this.types.row(this.items.primaryTypeCode(identity.classId));
+    const secondary = this.types.row(this.items.secondaryTypeCode(identity.classId));
+
+    const gem = this.gemTypeRow >= 0 && this.types.isOfType(primary, secondary, this.gemTypeRow);
+    const rune =
+      !gem && this.runeTypeRow >= 0 && this.types.isOfType(primary, secondary, this.runeTypeRow);
+
+    return gem || rune ? this.gems.rowForFillerClassId(identity.classId) : -1;
+  }
+
   contribution(filler: Unit | null, slot: number): Map<number, number> {
     const stats = new Map<number, number>();
 

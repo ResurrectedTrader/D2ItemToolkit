@@ -7,7 +7,7 @@ namespace D2ItemToolkit
     /// <summary>
     /// A captured <c>D2UnitStrc</c>, as the engine reads it. An item and a player are the same
     /// struct in the game, so both are an <see cref="IUnit"/>; a socket filler is another one
-    /// nested in <see cref="Sockets"/>, and its POSITION is the socket index.
+    /// nested in <see cref="Items"/>, and its POSITION is the socket index.
     ///
     /// This is the contract, not a container: every public entry point takes it, so a consumer
     /// that already holds unit state in its own shape can implement this over that shape instead
@@ -42,6 +42,18 @@ namespace D2ItemToolkit
         /// SetItems row, a monstats row for a body part, or a character class for an ear.
         /// </summary>
         int FileIndex { get; }
+
+        /// <summary>
+        /// dwItemLevel (+0x2C). **-1 means the capture did not record it**, which is not the same as
+        /// 0 — the game's own floor for a spawned item is 1.
+        ///
+        /// Nothing the tooltip WRITERS do needs this; it is here for the property handlers that
+        /// derive a value from it and otherwise have to report themselves instead: the skill level
+        /// behind funcs 11 and 19 when a property's max is non-positive (0x65f4de, 0x65f514,
+        /// 0x65f70a, 0x65f75b), and func 14's socket cap, which picks MaxSock1/MaxSock25/MaxSock40
+        /// by level (0x62bc81, 0x62bc8c).
+        /// </summary>
+        int ItemLevel { get; }
 
         int RarePrefix { get; }
         int RareSuffix { get; }
@@ -99,11 +111,47 @@ namespace D2ItemToolkit
         IReadOnlyList<IUnitStat> Stats { get; }
 
         /// <summary>
-        /// Contained units in socket-ordinal order. Only an item nests: a player's chain carries an
-        /// extended child per equipped piece, and nesting those would re-serialise the wearer's
-        /// whole kit inside one item.
+        /// The units this one contains — one relation, not two. On an ITEM those are its socket
+        /// fillers, in socket-ordinal order, and position IS the socket index. On a WEARER they are
+        /// the items it carries, which is what lets the library derive set state instead of asking
+        /// a caller for masks. That is ONE field carrying TWO relations, and a reader that recurses
+        /// — as a socket reader must — has to tell them apart: run a wearer through it and every
+        /// carried item's stats fold into the wearer's own. <see cref="ItemStatReader.EnumerateOwnGroups"/>
+        /// exists for exactly that.
+        ///
+        /// One level only. A filler is a socket of a carried item, so it sits one deeper than
+        /// anything reached by scanning a wearer, and no set item is socketable — so a wearer scan
+        /// never has to filter fillers out.
+        ///
+        /// The Horadric Cube is the case that does not fit: it is an item that holds items rather
+        /// than fillers, and one held there is at the same depth a filler would be. Nothing models
+        /// cube contents today; if that changes, this field means two relations and the scans below
+        /// need a rule they currently do without.
         /// </summary>
-        IReadOnlyList<IUnit> Sockets { get; }
+        IReadOnlyList<IUnit> Items { get; }
+
+        /// <summary>
+        /// pItemData's item location: 0 ground, 1 equipped, 2 belt, 3 inventory, 4 store, 5 trade,
+        /// 6 cube, 7 stash. -1 when the capture did not record one.
+        ///
+        /// This is NOT the unit's dwAnimMode, which is what the full-set block is really gated on
+        /// (0x48d870). A capture cannot reach animMode, so <see cref="TooltipEngine.SetStateOf"/>
+        /// substitutes `Location == 1` — deliberately, and the only option on the wire. Whether the
+        /// two always agree is untraced.
+        /// </summary>
+        int Location { get; }
+
+        /// <summary>
+        /// The grid column, and the EQUIP LOCATION 1..12 when <see cref="Location"/> is equipped.
+        /// One field carrying both is what the capture puts on the wire, not a modelling choice.
+        ///
+        /// 11 and 12 are the alternate weapon set (ITEMMODE_GetAlternateBodyLoc 0x55f240), which is
+        /// why the value matters here at all: INVENTORY_PlaceItemInGrid stamps the grid type as
+        /// `(bodyLoc >= 11) ? 4 : 3` (0x63b1e2), and a set piece on swap is therefore OWNED but
+        /// lights no worn bit.
+        /// </summary>
+        int X { get; }
+
 
         /// <summary>
         /// A viewer's skills and their BONUSED levels. This is the one thing a stat capture cannot
@@ -190,6 +238,16 @@ namespace D2ItemToolkit
         /// </summary>
         [JsonConverter(typeof(Int32NarrowingConverter))]
         public int FileIndex { get; set; }
+
+        /// <summary>dwItemLevel. -1 when the capture did not record it — see <see cref="IUnit"/>.</summary>
+        public int ItemLevel { get; set; }
+
+        /// <summary>pItemData item location. -1 when absent — see <see cref="IUnit.Location"/>.</summary>
+        public int Location { get; set; }
+
+        /// <summary>Grid column, or the equip location 1..12 when equipped.</summary>
+        public int X { get; set; }
+
         public int RarePrefix { get; set; }
         public int RareSuffix { get; set; }
         public int AutoAffix { get; set; }
@@ -244,13 +302,38 @@ namespace D2ItemToolkit
             set { _stats = value ?? new List<UnitStat>(); }
         }
 
-        private List<Unit> _sockets = new List<Unit>();
+        private List<Unit> _items = new List<Unit>();
         private List<UnitSkill> _skills = new List<UnitSkill>();
 
-        public List<Unit> Sockets
+        /// <summary>
+        /// Null ELEMENTS are coerced to a default unit rather than dropped. `"items": [null]` is
+        /// legal JSON that ten reader sites would otherwise dereference — every entry point threw
+        /// where the TypeScript peer, whose reader maps a null to a default unit, rendered happily.
+        /// Coercing rather than removing keeps POSITION meaning the socket index, which dropping
+        /// would renumber.
+        /// </summary>
+        public List<Unit> Items
         {
-            get { return _sockets; }
-            set { _sockets = value ?? new List<Unit>(); }
+            get { return _items; }
+            set { _items = Denulled(value); }
+        }
+
+        private static List<Unit> Denulled(List<Unit> units)
+        {
+            if (units == null)
+            {
+                return new List<Unit>();
+            }
+
+            for (int at = 0; at < units.Count; ++at)
+            {
+                if (units[at] == null)
+                {
+                    units[at] = new Unit();
+                }
+            }
+
+            return units;
         }
 
         public List<UnitSkill> Skills
@@ -261,12 +344,15 @@ namespace D2ItemToolkit
 
         public Unit()
         {
-            // Absent is not zero for these four. A missing classId or fileIndex means "no such
-            // row", and a missing flagsEx means expansion — 0 would read as classic and hide a
-            // unique's level requirement.
+            // Absent is not zero for these five. A missing classId or fileIndex means "no such
+            // row", a missing itemLevel means "not captured" where 0 would read as a real level
+            // below the game's own floor of 1, and a missing flagsEx means expansion — 0 would read
+            // as classic and hide a unique's level requirement.
             UnitType = -1;
             ClassId = -1;
             FileIndex = -1;
+            ItemLevel = -1;
+            Location = -1;
             FlagsEx = UnitFlagExpansion;
             Code = string.Empty;
             PlayerName = string.Empty;
@@ -282,7 +368,7 @@ namespace D2ItemToolkit
 
         IReadOnlyList<IUnitStat> IUnit.Stats { get { return Stats; } }
 
-        IReadOnlyList<IUnit> IUnit.Sockets { get { return Sockets; } }
+        IReadOnlyList<IUnit> IUnit.Items { get { return Items; } }
 
         IReadOnlyList<IUnitSkill> IUnit.Skills { get { return Skills; } }
 

@@ -21,6 +21,13 @@ export class ItemIdentity {
   quality = 0;
   flags: number = ItemRecordFlags.None;
   fileIndex = -1;
+
+  /**
+   * dwItemLevel, or -1 when the capture did not record it. See {@link IUnit.itemLevel} for what
+   * depends on it; every reader of this must handle -1, because most captures have none and the
+   * property handlers that want it report themselves instead of guessing.
+   */
+  itemLevel = -1;
   rarePrefix = 0;
   rareSuffix = 0;
   autoAffix = 0;
@@ -44,23 +51,23 @@ export class ItemIdentity {
 }
 
 /**
- * A whole item unit — identity, its OWN stats, and its own sockets. The unit document is
+ * A whole item unit — identity, its OWN stats, and whatever it contains. The unit document is
  * self-similar, so a socket filler has exactly this shape too, which is what
  * ITEM_CalcRequiredLevel's recursion at 0x62b901 walks.
  */
 export class ItemUnit {
   readonly identity: ItemIdentity;
   readonly stats: Map<number, number>;
-  readonly sockets: ItemUnit[] | null;
+  readonly items: ItemUnit[] | null;
 
   constructor(
     identity: ItemIdentity,
     stats: Map<number, number> | null = null,
-    sockets: ItemUnit[] | null = null,
+    items: ItemUnit[] | null = null,
   ) {
     this.identity = identity;
     this.stats = stats ?? new Map<number, number>();
-    this.sockets = sockets;
+    this.items = items;
   }
 }
 
@@ -138,6 +145,7 @@ export class ItemRecordReader {
     identity.quality = record.quality;
     identity.flags = record.itemFlags >>> 0;
     identity.fileIndex = record.fileIndex;
+    identity.itemLevel = record.itemLevel;
     identity.rarePrefix = record.rarePrefix;
     identity.rareSuffix = record.rareSuffix;
     identity.autoAffix = record.autoAffix;
@@ -162,7 +170,7 @@ export class ItemRecordReader {
   static readSocketUnits(record: Unit): ItemUnit[] {
     const units: ItemUnit[] = [];
 
-    for (const socket of ItemStatReader.enumerateSockets(record)) {
+    for (const socket of record.items) {
       units.push(
         new ItemUnit(
           ItemRecordReader.readIdentity(socket),
@@ -187,7 +195,7 @@ export class ItemRecordReader {
     viewer.classId = player.classId;
 
     const stats = new Map<number, number>();
-    for (const group of ItemStatReader.enumerateGroups(player)) {
+    for (const group of ItemStatReader.enumerateOwnGroups(player)) {
       // On pMyStats rather than pMyLastList, so it is not contributing.
       if ((group.flags & ItemStatListFlags.Set) !== 0) {
         continue;

@@ -31,7 +31,7 @@ class Program
 
         // A filler is a record of the same shape, so per-socket detail is just the reader again.
         int socketIndex = 0;
-        foreach (IUnit socket in ItemStatReader.EnumerateSockets(record))
+        foreach (IUnit socket in record.Items)
         {
             Dump("Socket " + socketIndex + ":",
                 ItemStatReader.ReconstructView(socket, ItemStatView.ItemOnly()));

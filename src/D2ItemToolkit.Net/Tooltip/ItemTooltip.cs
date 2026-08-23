@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 namespace D2ItemToolkit
@@ -83,6 +84,13 @@ namespace D2ItemToolkit
         FullSetBonus = 26,
 
         PartialSetBonus = 27,
+
+        /// <summary>
+        /// Not a section the game has. One block per socket filler, emitted below the item when
+        /// <see cref="TooltipOptions.SeparateSocketContributions"/> is set, so a reader can tell
+        /// what each gem or rune is actually contributing. Never produced otherwise.
+        /// </summary>
+        SocketContribution = 28,
     }
 
     public static class ItemTooltipColor
@@ -143,6 +151,18 @@ namespace D2ItemToolkit
         public ItemTooltipSection Section;
 
         public int Color;
+
+        /// <summary>
+        /// The stat this line displays, or -1 when it displays none — a name, a requirement, a
+        /// blank. Set for every modifier line and for the Defense line. With
+        /// <see cref="Layer"/> it is the key to look the line up in
+        /// <see cref="ItemRollRanges.Stats"/>, which is what makes a caller's own range display
+        /// possible without re-deriving the mapping.
+        /// </summary>
+        public int StatId = -1;
+
+        /// <summary>The stat's layer — the skill, class or tab. 0 for a plain stat.</summary>
+        public int Layer;
 
         public bool EmitsColorMarker;
 
@@ -517,12 +537,15 @@ namespace D2ItemToolkit
 
                 int running = color;
                 bool firstOfSection = true;
+                int sectionStat = StatOfSection(section);
+
                 foreach (string part in SplitLines(text))
                 {
                     var line = new ItemTooltipLine();
-                    line.Text = part;
+                    line.Text = firstOfSection ? Annotated(part, 0, sectionStat, running) : part;
                     line.Section = section;
                     line.Color = running;
+                    line.StatId = firstOfSection ? sectionStat : -1;
                     line.EmitsColorMarker = firstOfSection;
                     firstOfSection = false;
                     appended.Add(line);
@@ -724,12 +747,15 @@ namespace D2ItemToolkit
 
                 int running = color;
                 bool firstOfSection = true;
+                int sectionStat = StatOfSection(section);
+
                 foreach (string part in SplitLines(text))
                 {
                     var line = new ItemTooltipLine();
-                    line.Text = part;
+                    line.Text = firstOfSection ? Annotated(part, 0, sectionStat, running) : part;
                     line.Section = section;
                     line.Color = running;
+                    line.StatId = firstOfSection ? sectionStat : -1;
 
                     line.EmitsColorMarker = firstOfSection;
                     firstOfSection = false;
@@ -1046,6 +1072,77 @@ namespace D2ItemToolkit
             return keptAppendOrder;
         }
 
+        /// <summary>
+        /// Supplies the range text for a line, given every stat the line shows a number for and the
+        /// layer they share. Null by default, so an un-annotated render is byte-identical to what
+        /// the game draws — the corpus never sets it and the differential holds that.
+        /// </summary>
+        internal Func<IReadOnlyList<int>, int, string> RangeAnnotation;
+
+        /// <summary>
+        /// The colour the annotation is painted in, or -1 to inherit the line's. A marker restoring
+        /// the line's own colour follows it, so the rest of the line is unaffected — and the
+        /// running colour is tracked from the UN-annotated text, so an annotation can never bleed
+        /// into the next line.
+        /// </summary>
+        internal int RangeColor = -1;
+
+        /// <summary>
+        /// The single stat a section displays, or -1. Only the Defense line qualifies: it shows one
+        /// stat whose base genuinely rolls. Durability and the damage lines are excluded on purpose
+        /// — their base columns do not roll, so a span there would be about the `dur%` or `dmg%`
+        /// modifier and belongs on that modifier's own line, where it already is.
+        /// </summary>
+        private static int StatOfSection(ItemTooltipSection section)
+        {
+            return section == ItemTooltipSection.ArmorClass ? StatArmorClass : -1;
+        }
+
+        private const int StatArmorClass = 31;
+
+        /// <summary>
+        /// Appends the range text INSIDE the line — before its trailing terminator, since
+        /// <see cref="SplitLines"/> keeps that on the part it belongs to and appending after it
+        /// would put the annotation on the following line.
+        /// </summary>
+        private string Annotated(string part, int layer, int statId, int lineColor)
+        {
+            return Annotated(part, layer, statId < 0 ? null : new[] { statId }, lineColor);
+        }
+
+        private string Annotated(
+            string part, int layer, IReadOnlyList<int> shownStats, int lineColor)
+        {
+            if (RangeAnnotation == null || shownStats == null || shownStats.Count == 0
+                || part == null)
+            {
+                return part;
+            }
+
+            string annotation = RangeAnnotation(shownStats, layer);
+            if (string.IsNullOrEmpty(annotation))
+            {
+                return part;
+            }
+
+            if (RangeColor >= 0 && RangeColor != lineColor)
+            {
+                annotation = ItemTooltipColor.Marker + RangeColor.ToString(CultureInfo.InvariantCulture)
+                    + annotation
+                    + ItemTooltipColor.Marker + lineColor.ToString(CultureInfo.InvariantCulture);
+            }
+
+            string terminator = _sections.LineTerminator;
+            if (!string.IsNullOrEmpty(terminator)
+                && part.EndsWith(terminator, StringComparison.Ordinal))
+            {
+                return part.Substring(0, part.Length - terminator.Length)
+                    + annotation + terminator;
+            }
+
+            return part + annotation;
+        }
+
         private IEnumerable<string> SplitLines(string text, bool terminateTrailing = true)
         {
             string terminator = _sections.LineTerminator;
@@ -1129,15 +1226,28 @@ namespace D2ItemToolkit
                     ? modifier.Text ?? string.Empty
                     : (modifier.Text ?? string.Empty) + terminator;
 
+                bool firstPart = true;
+
                 foreach (string part in SplitLines(text, terminateTrailing: false))
                 {
                     var line = new ItemTooltipLine();
-                    line.Text = part;
+                    // An aggregated line gets its stats named, so the formatter can show a
+                    // composite span rather than one number belonging to neither half.
+                    line.Text = firstPart
+                        ? Annotated(
+                            part,
+                            modifier.Layer,
+                            modifier.ShownStats ?? new[] { modifier.StatId },
+                            running)
+                        : part;
                     line.Section = ItemTooltipSection.Modifiers;
                     line.Color = running;
+                    line.StatId = modifier.StatId;
+                    line.Layer = modifier.Layer;
 
                     line.EmitsColorMarker = firstOfSection;
                     firstOfSection = false;
+                    firstPart = false;
                     lines.Add(line);
 
                     running = LastEmbeddedColor(part, running);

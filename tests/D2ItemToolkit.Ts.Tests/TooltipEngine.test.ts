@@ -39,7 +39,7 @@ const ItemJson = `{
     { "stateNo": 0, "flags": 64,
       "stats": [ { "id": 16, "value": 150 }, { "id": 39, "value": 25 },
                  { "id": 80, "value": 30 } ] } ],
-  "sockets": [
+  "items": [
     { "unitType": 4, "classId": 604,
       "statsLists": [ { "stateNo": 0, "flags": 64,
                         "stats": [ { "id": 39, "value": 38 } ] } ] } ]
@@ -524,7 +524,7 @@ describe('parity with the C# engine', () => {
     const item = unitFromJson(`{
       "unitType": 4, "classId": 330, "quality": 2, "itemFlags": 16,
       "statsLists": [],
-      "sockets": [
+      "items": [
         { "unitType": 4, "classId": 604, "statsLists": [
           { "stateNo": 0, "flags": 64, "stats": [ { "id": 39, "value": 2147483647 } ] } ] },
         { "unitType": 4, "classId": 604, "statsLists": [
@@ -635,7 +635,7 @@ describe('building a record in code', () => {
           ],
         },
       ],
-      sockets: [
+      items: [
         createUnit({
           unitType: 4,
           classId: 604,

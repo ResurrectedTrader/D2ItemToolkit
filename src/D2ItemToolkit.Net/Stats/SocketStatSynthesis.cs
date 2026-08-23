@@ -107,7 +107,7 @@ namespace D2ItemToolkit
                 return merged;
             }
 
-            foreach (IUnit filler in ItemStatReader.EnumerateSockets(host))
+            foreach (IUnit filler in host.Items)
             {
                 // One level only: a jewel cannot itself hold sockets, so vanilla never nests
                 // further, and the game applies the filler to its immediate host.
@@ -168,6 +168,117 @@ namespace D2ItemToolkit
             }
 
             return stats;
+        }
+
+        /// <summary>
+        /// The gem/rune properties every filler would apply, before any of them is rolled — the same
+        /// selection <see cref="Contributions"/> applies, exposed so a range reconstruction can run
+        /// them at both ends instead of once.
+        ///
+        /// **No gems.txt cell actually rolls.** The three whose min differs from their max are
+        /// `dmg-fire`, `dmg-ltng` and `dmg-cold` on the Ral, Ort and Thul runes, and those are funcs
+        /// 15 and 16 — the two ENDS of a damage range, both fixed, read as separate parameters
+        /// exactly as funcs 11 and 19 read theirs. So a gem or rune contributes no span at all; a
+        /// socketed JEWEL does, but from its own affixes rather than from here.
+        /// </summary>
+        public IEnumerable<ItemProperty> FillerProperties(IUnit host, bool hostIsEquipped = false)
+        {
+            if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
+            {
+                yield break;
+            }
+
+            int slot = _items.GetInt(host.ClassId, "gemapplytype");
+            if (slot < 0 || slot > 2)
+            {
+                yield break;
+            }
+
+            foreach (IUnit filler in host.Items)
+            {
+                int row = FillerRow(filler);
+                if (row < 0)
+                {
+                    continue;
+                }
+
+                foreach (ItemProperty property in _gems.Properties(row, slot))
+                {
+                    if (property.PropertyId < 0)
+                    {
+                        break;
+                    }
+
+                    yield return property;
+                }
+            }
+        }
+
+        /// <summary>
+        /// items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
+        /// (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
+        /// </summary>
+        public int SlotFor(IUnit host, bool hostIsEquipped = false)
+        {
+            if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
+            {
+                return -1;
+            }
+
+            int slot = _items.GetInt(host.ClassId, "gemapplytype");
+            return slot >= 0 && slot <= 2 ? slot : -1;
+        }
+
+        /// <summary>
+        /// ONE filler's properties, so a caller can range or describe each socket separately rather
+        /// than as the union <see cref="Contributions"/> returns.
+        /// </summary>
+        public IEnumerable<ItemProperty> FillerProperties(IUnit filler, int slot)
+        {
+            if (slot < 0 || slot > 2)
+            {
+                yield break;
+            }
+
+            int row = FillerRow(filler);
+            if (row < 0)
+            {
+                yield break;
+            }
+
+            foreach (ItemProperty property in _gems.Properties(row, slot))
+            {
+                if (property.PropertyId < 0)
+                {
+                    break;
+                }
+
+                yield return property;
+            }
+        }
+
+        /// <summary>
+        /// The gems.txt row a filler applies from, or -1 when it carries its own stats, is not a gem
+        /// or rune, or has no row. The same three gates <see cref="Contribution"/> applies.
+        /// </summary>
+        private int FillerRow(IUnit filler)
+        {
+            if (filler == null
+                || ItemStatReader.ReconstructView(filler, ItemStatView.Modifiers()).Count != 0)
+            {
+                return -1;
+            }
+
+            ItemIdentity identity = ItemRecordReader.ReadIdentity(filler);
+
+            int primary = _types.Row(_items.PrimaryTypeCode(identity.ClassId));
+            int secondary = _types.Row(_items.SecondaryTypeCode(identity.ClassId));
+
+            bool gem = _gemTypeRow >= 0 && _types.IsOfType(primary, secondary, _gemTypeRow);
+            bool rune = !gem && _runeTypeRow >= 0
+                             && _types.IsOfType(primary, secondary, _runeTypeRow);
+
+            return gem || rune ? _gems.RowForFillerClassId(identity.ClassId) : -1;
         }
 
         private static void Add(

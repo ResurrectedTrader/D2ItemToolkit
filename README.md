@@ -49,7 +49,7 @@ level-scaled line. Pass `null` and you get the item rendered with no player cont
 legal call that produces fewer lines.
 
 Both are unit documents of the same shape, because an item and a player are the same struct in the
-game. A socket filler is another one nested inside.
+game. A socket filler is another one nested inside — and so is a player's carried gear.
 
 ### C#
 
@@ -136,12 +136,13 @@ but every one of its fields is required, so `createUnit` is the practical way in
 
 ```
 IUnit (item) ──────┐
-                   ├── TooltipEngine ──┬── Render         → the tooltip
-IUnit (viewer) ────┘                   ├── RenderSetItem  → a set piece, with siblings supplied
-    optional                           ├── Breakdown      → where each modifier came from
-                                       ├── Appearance     → inventory sprite and palette shift
-                                       ├── Requirements   → strength / dexterity / level / class
-                                       └── ClassIdsOfType → every classId under a type code
+                   ├── TooltipEngine ──┬── Render          → the tooltip
+IUnit (viewer) ────┘                   ├── Breakdown       → where each modifier came from
+    optional                           ├── Ranges          → what each stat could have rolled
+                                       ├── RangesForViewer → the same, plus the viewer's set tiers
+                                       ├── Appearance      → inventory sprite and palette shift
+                                       ├── Requirements    → strength / dexterity / level / class
+                                       └── ClassIdsOfType  → every classId under a type code
 ```
 
 It also exposes the parsed game tables — see [Reading the tables](#reading-the-tables). The section
@@ -187,19 +188,71 @@ In TypeScript `line.text` is typed `string | null`, so narrow it before use.
 
 ### Options
 
+Every knob on `TooltipOptions`. The defaults reproduce the game exactly; the three marked **beyond
+the game** deliberately do not, and are off unless you ask for them.
+
+| option | default | what it does |
+|---|---|---|
+| `Difficulty` | `0` | `GetDificulity()`. Only a quest item with `questdiffcheck` reads it |
+| `ShopMode` | `0` | 0 outside a shop. 1–9 add the transaction-cost line, and any non-zero value suppresses both usage lines |
+| `QuestColorPrefix` | `false` | Appends the trailing quest-colour marker |
+| `ClientPlayer` | `null` | The character, when the viewer is a **mercenary** — see below |
+| `IncludeSockets` | `true` | *Beyond the game.* False renders the base item as if nothing were socketed in it |
+| `ShowRolledRanges` | `false` | *Beyond the game.* Writes each stat's roll span inline |
+| `RangeAnnotation` | `null` | How a span is written. Null uses the built-in format |
+| `RangeColor` | grey (5) | Paints the annotation its own colour. Grey by default so a span reads as an annotation rather than as part of the line; -1 inherits the line's |
+| `SeparateSocketContributions` | `false` | *Beyond the game.* Moves each filler's mods into its own block below the item |
+
 ```csharp
 var options = new TooltipOptions();
-options.IncludeSockets = false;   // render the base item as if nothing were socketed in it
-options.ShopMode = 1;             // 1-9 mark a shop context (see the gap below)
-options.Difficulty = 2;           // only a quest item with questdiffcheck reads this
-options.QuestColorPrefix = true;  // append the trailing quest-colour marker
-options.ClientPlayer = character; // see below
+options.ShopMode = 1;                          // 1-9 mark a shop context (see the gap below)
+options.ShowRolledRanges = true;               // "+175% Enhanced Damage [150-200]"
+options.RangeColor = ItemTooltipColor.White;   // override the grey default
+options.SeparateSocketContributions = true;    // one block per gem, below the item
+options.ClientPlayer = character;              // see below
 ```
 
 `ClientPlayer` exists for exactly one case: a **mercenary's** panel. Requirements, class
 restriction, block chance and the smite gate all use the viewer — who is the merc — but the attack
 speed line is timed against the *character*. If you are rendering a merc's equipment, set this to
 the player. Leave it null everywhere else.
+
+The TypeScript names are the same in camelCase — `showRolledRanges`, `rangeColor`,
+`separateSocketContributions` — and it is a plain object literal, so you only pass what you set.
+
+### Separating the sockets
+
+The game merges a filler's mods into the item's own block, so you cannot tell which gem did what.
+`SeparateSocketContributions` moves them out — the item shows only its own, and each filler gets a
+block below headed by its name:
+
+```
+merged (what the game draws)          SeparateSocketContributions
+────────────────────────────          ───────────────────────────
+Gemmed Crystal Sword                  Crystal Sword
+One-Hand Damage: 6 to 18              One-Hand Damage: 5 to 15
+Durability: 20 of 20                  Durability: 20 of 20
++20% Enhanced Damage                  Socketed (3)
++40 to Attack Rating
+Adds 20-50 fire damage                Ral Rune
+Socketed (3)                          Adds 5-30 fire damage
+
+                                      Perfect Ruby
+                                      Adds 15-20 fire damage
+
+                                      Jagged Jewel
+                                      +20% Enhanced Damage [10-20]
+                                      +40 to Attack Rating
+```
+
+The blocks carry `ItemTooltipSection.SocketContribution` and are separated by a blank row, so three
+gems do not read as one list. Nothing is dropped — the fillers are moved, which is why the item's
+own damage line drops back to its unsocketed value.
+
+Combined with `ShowRolledRanges`, a **jewel** is ranged from its own affixes, which is the case that
+actually rolls. A gem or rune shows no span, and that is correct rather than missing: no gems.txt
+cell rolls at all. The three whose min differs from their max — `dmg-fire`, `dmg-ltng` and
+`dmg-cold` on Ral, Ort and Thul — are the two fixed *ends* of a damage range, not a roll.
 
 ### Breakdown — where each modifier came from
 
@@ -222,9 +275,145 @@ For the shield above with a **Perfect Ruby** socketed:
 `Render` merges those into one `Fire Resist +65%`, because that is what the game does.
 `IncludeSockets = false` gives `Fire Resist +25%` instead.
 
+`Breakdown` takes the same `TooltipOptions`, so `ShowRolledRanges` annotates each bucket with the
+span that matches ITS numbers — the item's own for `Base`, `Magic` and `SetBonuses`, the fillers'
+for `Sockets`. See [Ranges](#ranges--what-each-stat-could-have-rolled).
+
 **Caveat:** the game never draws these separately, so unlike `Render` this cannot be checked
 against the original — it is the one part of the API with no ground truth. Every line is still
 produced by the same writers; only the stat selection differs.
+
+### Ranges — what each stat could have rolled
+
+To show `+120 Defense (98–141)` you need the span the roll came from. `Ranges` rebuilds the
+properties the item's own sources would have rolled and reports each stat's low and high:
+
+```csharp
+ItemRollRanges ranges = TooltipEngine.Embedded.Ranges(item);
+
+foreach (RolledStatRange r in ranges.Stats)
+{
+    if (r.IsRange)
+    {
+        Console.WriteLine($"stat {r.StatId}: {r.Low}..{r.High} from {r.Sources}");
+    }
+}
+```
+
+Every rendered line also tells you which stat it came from — `line.StatId` and `line.Layer`, or -1
+for a line that shows no stat — so you can pair the two yourself and decide whether a range becomes
+`(98–141)`, a bar, or a colour.
+
+**A span always matches the number beside it.** That is the rule the three views follow, and it is
+why they disagree. Take a rare armour rolling Fire Resist 11–20, socketed with a jewel rolling
+Fire Resist 5–10:
+
+| view | line | span | why |
+|---|---|---|---|
+| `Render` (default) | `Fire Resist +28%` | `[16-30]` | one line holding the SUM, so the span sums both: 11+5 to 20+10 |
+| `Render` + `SeparateSocketContributions` | `Fire Resist +20%` | `[11-20]` | the fillers are moved out, so the line and its span are the item's own |
+| " " (the jewel's block) | `Fire Resist +8%` | `[5-10]` | the jewel's own affix roll |
+| `Breakdown.Magic` | `Fire Resist +20%` | `[11-20]` | the item's own mods, sockets excluded |
+| `Breakdown.Sockets` | `Fire Resist +8%` | `[5-10]` | what the fillers add |
+
+Ranges work in **both** `Render` and `Breakdown` — pass the same `ShowRolledRanges` either way.
+
+If you just want it written inline, set the flag:
+
+```csharp
+var options = new TooltipOptions { ShowRolledRanges = true };
+
+foreach (ItemTooltipLine line in TooltipEngine.Embedded.Render(item, player, options).Lines)
+{
+    Console.WriteLine(line.Text);
+}
+```
+
+```
+The Eye of Etlich                       Superior Crystal Sword
+Amulet                                  One-Hand Damage: 5 to 16
+Required Level: 15                      Durability: 20 of 22
++1 to All Skills                        Required Strength: 43
+Adds 1-4 cold damage                    +7% Enhanced Damage [0-15]
+5% Life stolen per hit [3-7]            +2 to Attack Rating [1-3]
++25 Defense vs. Missile [10-40]         Increase Maximum Durability 12% [10-15]
++3 to Light Radius [1-5]
+```
+
+A line that prints **two** numbers gets two spans, positionally:
+
+```
+Adds 1-4 cold damage [(1-2)-(3-5)]      the first number rolled 1-2, the second 3-5
++175% Enhanced Damage [150-200]         one number, so one span
++2 to all Attributes                    four stats sharing one number, all fixed — nothing to say
+```
+
+`RangeColor` paints the spans distinctly. The annotation is wrapped in a colour marker and a second
+one restoring the line's own, so nothing after it is repainted and the following line is unaffected.
+
+The format is yours — `RangeAnnotation` receives one `RolledStatRange` per number the line prints,
+in print order, and returning null suppresses that line, which is how you show ranges for some
+stats and not others.
+
+Three things it deliberately leaves alone:
+
+| left alone | why |
+|---|---|
+| `+2 to All Skills` when it could only be 2 | a degenerate range reads as a range |
+| `Required Level: 15` | not a stat |
+| a partly-resolved multi-number line | one span against two numbers belongs to neither |
+
+**Packed values are decoded, not skipped.** A charged-skill stat stores
+`(maxCharges << 8) + current`, so its raw span reads `[2306-2313]`; `DisplayLow`/`DisplayHigh` give
+the charge count instead, and the line comes out `Level 13 Cloak of Shadows (5/9 Charges) [2-9]`.
+`IsPackedEncoding` tells you when the raw ends are an encoding rather than a magnitude. The by-time
+stats are packed too but never *roll* — the property's own min and max go in verbatim — so there is
+nothing to show for them either way.
+
+Sources are resolved from the record alone: the affix ids it stores, its UniqueItems or SetItems
+row, its runeword name, its superior modifier, its socket fillers, and the base Defense roll. Set
+bonuses are excluded by default because they belong to the worn set rather than to the item; pass
+`earnedSetIds` to fold them in.
+
+Three cases return something other than a plain span, and each says so rather than guessing:
+
+| | |
+|---|---|
+| `LayerVaries` | the roll picked the *skill*, not the value — Ormus' Robes is always +3, to one of 25 sorceress skills |
+| `CraftedRecipeUnknown` | a crafted item's record does not name the cube recipe that made it, and this one could not be worked out, so the recipe's fixed mods stay unattributed |
+| `ItemLevelDependent` | a few properties derive their value from the item's level. Supply `itemLevel` on the record and they become exact |
+
+`OutOfRange` lists stats whose recorded value falls outside the span computed for them. For a record
+the game produced it is empty; if it is not, the reconstruction is wrong and says so.
+
+#### Crafted items
+
+A crafted item's record does not say which cube recipe made it, but usually that can be worked out.
+The 36 crafted recipes are four families over nine equipment slots, one per pair, so the item's slot
+leaves four candidates, and the one whose every fixed mod the record actually carries is the answer.
+`CraftedRecipe` gives the resulting `cubemain.txt` row, and the recipe's mods then carry real spans
+instead of sitting in `Unattributed`:
+
+```csharp
+ItemRollRanges ranges = engine.Ranges(craftedCrown);
+
+if (ranges.CraftedRecipe >= 0)
+{
+    // e.g. "magic crown + jewel + rune 06 + perfect emerald -> safety helm"
+    Console.WriteLine(engine.Data.CubeMain.GetString(ranges.CraftedRecipe, "description"));
+}
+```
+
+It declines rather than guesses. Two families can both fit when the item's own affixes happen to
+supply the other's stats; some slots — a bow, say — no recipe covers at all; and a class-specific
+shield (a paladin auric shield, a necromancer voodoo head) resolves to no slot, because those sit
+beside the ordinary shield type rather than under it. Each leaves `CraftedRecipe` at `-1` and
+`CraftedRecipeUnknown` true. On the shipped tables it can fail to name a recipe, but it does not
+name the wrong one.
+
+**Caveat:** as with `Breakdown`, the game never computes this, so it has no ground truth to be
+checked against. What it is checked against is the tables' own min/max columns, the item's own
+recorded values, and the other implementation over every corpus case.
 
 ### Appearance — drawing the item in a grid
 
@@ -254,9 +443,11 @@ bool metStrength = req.MetStrength;
 bool metLevel = req.MetLevel;
 ```
 
-The numbers do not depend on the viewer, but the flags do. **With no viewer every `Met*` flag reads
-false** except `MetClass` — a null unit's stats read as 0, and the test is `available > 0 &&
-available >= required`, so even a zero requirement fails. Pass a viewer if you care about the flags.
+The numbers do not depend on the viewer, but the flags do. **With no viewer `MetStrength` and
+`MetDexterity` read false** — a null unit's stats read as 0 and the test is `available > 0 &&
+available >= required`, so even a zero requirement fails. `MetLevel` has no `> 0` guard, so it reads
+TRUE whenever the required level is 0, which is the ordinary case; `MetClass` is true unless the
+item is class-restricted. Pass a viewer if you care about the flags.
 
 (That is only the API. The rendered tooltip does not paint anything red without a viewer.)
 
@@ -271,26 +462,40 @@ class-specific sword types.
 
 ### Set items
 
-An identified set item uses a different builder, and `Render` routes to it automatically. But the
-item's own record cannot say which sibling pieces the viewer is carrying, so on its own it renders
-every piece red — which is what the game draws for a character holding that piece alone.
-
-To render it properly, supply what the record cannot know. `engine.Sets` is how you enumerate a
-set's pieces to build those ids and masks:
+An identified set item uses a different builder, and `Render` routes to it automatically. Which
+sibling pieces count — and which of those raise a bonus tier — is worked out from the viewer, so
+there is nothing to assemble:
 
 ```csharp
-var set = new SetItemTooltipInput();
-set.OwnedSetItemIds = ownedIds;            // setitems row indices the viewer holds anywhere
-set.WornMaskIncludingSelf = wornMask;      // bit per set index, pieces actually equipped
-set.WornMaskExcludingSelf = wornMaskMinusThisPiece;
-set.IsEquipped = true;
-
-Tooltip tip = TooltipEngine.Embedded.RenderSetItem(item, set, player);
+Tooltip tip = TooltipEngine.Embedded.Render(item, player);
 ```
 
-> **Build the worn masks from body locations 1-10 only.** Locations 11 and 12 are the weapon-swap
-> slots, and a piece on your swap bar does not count toward the set bonus. Including them is the
-> easiest way to get this wrong.
+All it needs is that the player's `Items` carry their `Location` and, when equipped, their `X`:
+
+```csharp
+var player = new Unit();
+player.UnitType = 0;
+player.Items.Add(halo);      // halo.Location = 1 (equipped), halo.X = 6  (ring slot)
+player.Items.Add(mantle);    // mantle.Location = 1,          mantle.X = 3 (torso)
+player.Items.Add(wings);     // wings.Location = 3 (inventory)
+```
+
+That gives the piece list its colours — carried pieces green, the rest red — selects the partial
+tiers, and renders the full-set block. **A piece on the alternate weapon set is deliberately not the
+same as a worn one:** it still colours green, because the game counts it as carried, but it lights
+no bit and raises no tier. That distinction is exactly why this is derived rather than handed over
+as a mask; body locations 11 and 12 are the swap pair, and counting them is the easiest way to show
+one bonus tier too many.
+
+`Ranges` takes the same viewer and folds in whichever set tiers it has earned:
+
+```csharp
+ItemRollRanges ranges = TooltipEngine.Embedded.RangesForViewer(item, player);
+```
+
+For a "what if I equipped the last piece" preview, hand it a viewer carrying the piece you are
+imagining. There is no separate hypothetical-state API — a copy of the player with one more item in
+`Items` *is* the hypothesis, and it goes through exactly the same derivation as the real one.
 
 ### Reading the tables
 
@@ -308,9 +513,11 @@ for (int classId = 0; classId < engine.Items.RowCount; ++classId)
 ```
 
 `RowAt` returns null past the end rather than throwing. The same shape holds for `engine.Types`,
-`engine.Data.ItemStatCost`, `engine.Data.Skills`, `engine.Data.Classes`, and the tables you build
-yourself from `engine.Data` — `ColorTable`, `GemTable`, `PropertiesTable`, `MagicAffixTable`,
-`MissileTable`, `SkillDamage`.
+`engine.Data.ItemStatCost`, `engine.Data.Skills`, `engine.Data.Classes`, and the `ColorTable`,
+`GemTable` and `PropertiesTable` you build yourself from `engine.Data`.
+
+`MagicAffixTable`, `MissileTable` and `SkillDamage` do **not** follow it — they are keyed lookups
+rather than row walks, so reach for their own accessors instead of `RowAt`.
 
 Two tables have two row spaces and name their accessors after them instead:
 
@@ -343,8 +550,12 @@ C# has `D2DataFiles.LoadEmbedded()` and `D2DataFiles.Load(dirs...)`; TypeScript 
 
 ## The record format
 
-A unit document is self-similar — a socket filler is another unit, and its **position in the array
-is the socket index**:
+A unit document is self-similar. `items` is what a unit contains: on an ITEM those are its socket
+fillers, and **position in the array is the socket index**; on a WEARER they are the items it
+carries, each with a `location` and — when equipped — an `x` giving the body slot.
+
+That second form is what lets the library work out set state for you, so nothing has to hand it a
+bit mask:
 
 ```json
 {
@@ -355,7 +566,7 @@ is the socket index**:
     { "stateNo": 0,   "flags": 64,         "stats": [ { "id": 39, "value": 40 } ] },
     { "stateNo": 165, "flags": 8256,       "stats": [ { "id": 0, "value": 20 } ] }
   ],
-  "sockets": [
+  "items": [
     { "unitType": 4, "classId": 620 }
   ]
 }
@@ -384,9 +595,9 @@ traced to the instruction that causes it, and the code cites the address.
 
 | | |
 |---|---|
-| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **864** |
+| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **935** |
 | hostile producer-legal inputs, both engines agreeing | **11,972** |
-| tests | **920** C# / **930** TypeScript |
+| tests | **1032** C# / **1049** TypeScript |
 | captured client tooltips reproduced byte-identically | **64 / 64** |
 
 The capture set is a private `captures.db` of real client tooltips and is not part of this
@@ -410,9 +621,11 @@ possessive grammar does not.
 level, which the record does not carry, so they fall back to level 1. No shipped item reaches them
 — a test asserts that — but a modded table could.
 
-**Eight property functions are unimplemented.** They are unreachable through this API rather than
-merely unused: affixes, uniques and runewords arrive with their stats already computed, so nothing
-calls them. A test walks the shipped tables and fails the build if that ever stops being true.
+**One property function is unimplemented.** Func 9, and no shipped table carries it — a test walks
+them and fails the build if that stops being true. The rest are all implemented and genuinely
+reached: `Ranges` re-applies them to reconstruct roll spans, which is what put them on the live
+path. (An earlier edition of this line said eight were unimplemented "because nothing calls them";
+both halves are now false.)
 
 **The C++ producer is unfinished.** An optional capture half that reads a live game's memory. You
 do not need it to use the library — only to generate records from a running client.

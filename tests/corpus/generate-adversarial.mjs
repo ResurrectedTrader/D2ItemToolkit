@@ -37,9 +37,9 @@
 //   * `magicPrefix` / `magicSuffix` are always written as exactly three numbers from
 //     `wMagicPrefix[3]` / `wMagicSuffix[3]`.
 //   * `ITEMSTATS_StoreUnitIdentity` returns early at `if (!pItemData) return;`, so a unit
-//     carrying only `unitType` + `classId` is real; and `sockets` is omitted when empty.
+//     carrying only `unitType` + `classId` is real; and `items` is omitted when empty.
 //   * producer/ItemStatCapture.cpp: "A jewel cannot itself hold sockets, so one level of nesting
-//     is all vanilla produces" — a socket filler never has a `sockets` array.
+//     is all vanilla produces" — a socket filler never has an `items` array.
 //   * `dwClassId` on an item indexes the single table compiled from weapons, then armor, then
 //     misc (0x633351 / 0x63336d / 0x63338c, summed at 0x6333ab). Against the shipped tables and
 //     after the `Expansion` splice that is 306 + 202 + 151 = 659 rows, so 0..658.
@@ -84,7 +84,7 @@ function record(classId, opts = {}) {
   } else {
     r.statsLists = lists;
   }
-  if (opts.sockets !== undefined) r.sockets = opts.sockets;
+  if (opts.items !== undefined) r.items = opts.items;
   return r;
 }
 
@@ -267,7 +267,7 @@ for (const layer of LAYERS) {
 
 // ---------------------------------------------------------------------------------------------
 // 3. Empty and absent — only the four shapes the producer really writes. A leaf with no stats is
-//    dropped by ITEMSTATS_StoreVisitor rather than emitted, and `sockets` is omitted when empty,
+//    dropped by ITEMSTATS_StoreVisitor rather than emitted, and `items` is omitted when empty,
 //    so neither has a case here.
 // ---------------------------------------------------------------------------------------------
 
@@ -276,11 +276,11 @@ add('empty-statslists-array', record(ID.lrg, { lists: [] }), PLAYER);
 // A filler with no item data at all: ITEMSTATS_StoreUnitIdentity returns at `if (!pItemData)`.
 add('empty-socket-bare', record(ID.lrg, {
   base: [{ id: 31, value: 100 }, { id: 194, value: 1 }], top: { itemFlags: 16 | 0x800 },
-  sockets: [{ unitType: 4, classId: ID.gpr }],
+  items: [{ unitType: 4, classId: ID.gpr }],
 }), PLAYER);
 add('empty-socket-empty-lists', record(ID.lrg, {
   base: [{ id: 31, value: 100 }, { id: 194, value: 1 }], top: { itemFlags: 16 | 0x800 },
-  sockets: [{ unitType: 4, classId: ID.gpr, statsLists: [] }],
+  items: [{ unitType: 4, classId: ID.gpr, statsLists: [] }],
 }), PLAYER);
 add('empty-viewer-omitted', record(ID.lrg, { base: [{ id: 31, value: 100 }], mods: [{ id: 214, value: 16 }] }), undefined);
 
@@ -425,7 +425,7 @@ add('flagsex-absent', record(ID.lrg, { base: [{ id: 31, value: 100 }], top: { qu
 // ---------------------------------------------------------------------------------------------
 // 6. Sockets — more fillers than the declared count and fewer, and the rune-versus-gem join.
 //    No nesting past one level: producer/ItemStatCapture.cpp notes that a jewel cannot itself
-//    hold sockets, so a filler never carries a `sockets` array.
+//    hold sockets, so a filler never carries an `items` array.
 // ---------------------------------------------------------------------------------------------
 
 // ITEMSTATS_StoreVisitor drops a leaf with no stats, so a filler that grants nothing carries an
@@ -444,8 +444,8 @@ for (const declared of [0, 1, 2, 6, -1, INT_MAX, INT_MIN]) {
     add('sock-d' + declared + '-n' + count, record(ID.lrg, {
       base: [{ id: 31, value: 100 }, { id: 194, value: declared }],
       top: { itemFlags: 16 | 0x800 },
-      // `sockets` is omitted when empty, not written as [].
-      sockets: count === 0 ? undefined : fillers,
+      // `items` is omitted when empty, not written as [].
+      items: count === 0 ? undefined : fillers,
     }), PLAYER);
   }
 }
@@ -454,7 +454,7 @@ for (const declared of [0, 1, 2, 6, -1, INT_MAX, INT_MIN]) {
 add('sock-filler-base-array', record(ID.lrg, {
   base: [{ id: 31, value: 100 }, { id: 194, value: 1 }],
   top: { itemFlags: 16 | 0x800 },
-  sockets: [{
+  items: [{
     unitType: 4, classId: ID.jew, quality: 4,
     statsLists: [
       { stateNo: 0, flags: 2147483648, stats: [{ id: 31, value: INT_MAX }] },
@@ -466,26 +466,26 @@ add('sock-filler-base-array', record(ID.lrg, {
 add('sock-mixed-join', record(ID.crs, {
   base: [{ id: 194, value: 4 }],
   top: { itemFlags: 16 | 0x800 },
-  sockets: [filler(ID.skz), filler(ID.r01, []), filler(ID.gcv), filler(ID.r08, [])],
+  items: [filler(ID.skz), filler(ID.r01, []), filler(ID.gcv), filler(ID.r08, [])],
 }), PLAYER);
 add('sock-runes-only', record(ID.crs, {
   base: [{ id: 194, value: 3 }],
   top: { itemFlags: 16 | 0x800 },
-  sockets: [filler(ID.r01, []), filler(ID.r08, []), filler(ID.r01, [])],
+  items: [filler(ID.r01, []), filler(ID.r08, []), filler(ID.r01, [])],
 }), PLAYER);
 // A filler at each end of the compiled items table — a filler is an item, so the same 0..658.
 for (const classId of [0, LAST_ITEM_CLASS - 1, LAST_ITEM_CLASS]) {
   add('sock-filler-class-' + classId, record(ID.lrg, {
     base: [{ id: 31, value: 100 }, { id: 194, value: 1 }],
     top: { itemFlags: 16 | 0x800 },
-    sockets: [filler(classId)],
+    items: [filler(classId)],
   }), PLAYER);
 }
 // Socket fillers carrying overflowing contributions.
 add('sock-overflow', record(ID.lrg, {
   base: [{ id: 31, value: INT_MAX }, { id: 194, value: 2 }],
   top: { itemFlags: 16 | 0x800 },
-  sockets: [filler(ID.gpr, [{ id: 31, value: INT_MAX }]), filler(ID.gpr, [{ id: 31, value: INT_MAX }])],
+  items: [filler(ID.gpr, [{ id: 31, value: INT_MAX }]), filler(ID.gpr, [{ id: 31, value: INT_MAX }])],
 }), PLAYER);
 
 // ---------------------------------------------------------------------------------------------
@@ -520,7 +520,10 @@ add('viewer-holyshield', ITEM_FOR_VIEWER(), player(3, 50, {
     { stateNo: 101, flags: 64, stats: [{ id: 20, value: 30 }] },
   ],
 }));
-add('viewer-sockets', ITEM_FOR_VIEWER(), player(3, 50, { sockets: [filler(ID.gpr)] }));
+// The carried filler holds STRENGTH, not a resist: a viewer reads stats 0/2/12, so a gem carrying
+// only stat 39 rendered identically to a viewer carrying nothing and could not see a reader that
+// folded carried gear into the wearer's own attributes.
+add('viewer-carrying-a-gem', ITEM_FOR_VIEWER(), player(3, 50, { items: [filler(ID.gpr, [{ id: 0, value: 100 }])] }));
 add('viewer-overflowing-level', ITEM_FOR_VIEWER(), {
   unitType: 0, classId: 3,
   statsLists: [

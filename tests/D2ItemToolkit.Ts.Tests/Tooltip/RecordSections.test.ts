@@ -587,7 +587,7 @@ describe('a record end to end', () => {
       "classId": ${classId}, "quality": 2,
                   "itemFlags": ${16 | 0x800 | 0x04000000},
       "statsLists": [],
-      "sockets": [ { "classId": ${ral} },
+      "items": [ { "classId": ${ral} },
                    { "classId": ${amn} } ] }`);
 
     const runes = single(lines, l => l.section === ItemTooltipSection.RuneLetters);
@@ -2046,7 +2046,7 @@ const ItemDoc = `{
                  { "id": 73, "value": 62 }, { "id": 194, "value": 1 },
                  { "id": 20, "value": 25 } ] }
   ],
-  "sockets": [
+  "items": [
     { "unitType": 4, "classId": %GPR%, "code": "gpr", "quality": 2,
       "itemFlags": 16, "format": 100, "fileIndex": -1,
       "magicPrefix": [ 0, 0, 0 ], "magicSuffix": [ 0, 0, 0 ],
@@ -2149,7 +2149,7 @@ describe("the producer's own document shape", () => {
     const item = producerItemDoc();
 
     let seen = 0;
-    for (const socket of ItemStatReader.enumerateSockets(item)) {
+    for (const socket of item.items) {
       ++seen;
       const filler = ItemRecordReader.readIdentity(socket);
 

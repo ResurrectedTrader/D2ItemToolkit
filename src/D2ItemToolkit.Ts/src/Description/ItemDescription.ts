@@ -28,10 +28,33 @@ export class ItemDescriptionLine {
 
   statId = 0;
 
+  /**
+   * The stat's layer — the skill, class or tab the line is about. Carried alongside statId so a
+   * caller can match a rendered line back to one stat KEY rather than to a stat id that several
+   * skills share.
+   */
+  layer = 0;
+
   value = 0;
 
   descPriority = 0;
   isGroup = false;
+
+  /**
+   * The line speaks for MORE than the one stat in statId — a DescGrp variant ("+2 to all
+   * Attributes") or a min-max damage line ("Adds 1-4 cold damage", which is coldmindam and
+   * coldmaxdam together). A single stat's roll range is the wrong thing to show against one of
+   * these, since the reader cannot tell which half it belongs to.
+   */
+  aggregated = false;
+
+  /**
+   * Every stat this line displays a number for, in the order the numbers appear. Null means just
+   * statId. This is what lets a roll range be shown against an aggregated line as the composite it
+   * is — "Adds 1-4 cold damage" spans two stats and so wants two spans — rather than being
+   * suppressed for want of a single answer.
+   */
+  shownStats: number[] | null = null;
 
   preJoined = false;
 
@@ -239,8 +262,11 @@ export class ItemDescriptionGenerator {
           const damageLine = new ItemDescriptionLine();
           damageLine.text = aggregated;
           damageLine.statId = statId;
+          damageLine.layer = entry[0];
           damageLine.value = entry[1];
           damageLine.preJoined = true;
+          damageLine.aggregated = ItemDamageAggregate.showsSeveralValues(statId);
+          damageLine.shownStats = ItemDamageAggregate.statsShownBy(statId);
           lines.push(damageLine);
           continue;
         }
@@ -468,9 +494,22 @@ export class ItemDescriptionGenerator {
     const line = new ItemDescriptionLine();
     line.text = text;
     line.statId = descriptor.statId;
+    line.layer = layer;
     line.value = c.value;
     line.descPriority = descriptor.descPriority;
     line.isGroup = grouped;
+    line.aggregated = grouped;
+
+    // A DescGrp line prints ONE number for the whole group, so every member shares it and shares
+    // its span. Naming them all lets the formatter see they agree and collapse to a single span
+    // rather than repeating it four times.
+    if (grouped) {
+      const members = this.stats.getStatsInDescGroup(descriptor.descGrp);
+      if (members.length !== 0) {
+        line.shownStats = [...members];
+      }
+    }
+
     return line;
   }
 

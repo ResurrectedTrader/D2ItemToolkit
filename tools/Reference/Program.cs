@@ -30,6 +30,14 @@ namespace D2ItemToolkit.Tools
         private static readonly SetTable Sets = new SetTable(
             Data.Sets, Data.SetItems, Data.Strings);
 
+        private static readonly RolledRangeReconstructor Ranges = new RolledRangeReconstructor(
+            Data, Items, Types, new MagicAffixTable(Data), Sets);
+
+        // The facade, for the two layers that exist to police the OPT-IN render modes. Those route
+        // by tooltip kind, which the hand-built path below deliberately does itself — reusing the
+        // engine keeps this from re-implementing that routing a second time.
+        private static readonly TooltipEngine Engine = TooltipEngine.FromData(Data);
+
         private static readonly SocketStatSynthesis SocketStats =
             new SocketStatSynthesis(Data, Items, Types);
 
@@ -101,7 +109,7 @@ namespace D2ItemToolkit.Tools
                 // Read BEFORE the socket synthesis: ITEM_RecalcAllEquippedItems 0x4c1350 throws an
                 // equipped set item's fillers away (0x4c1658 / 0x4c1661), so `isEquipped` decides
                 // whether there is a contribution at all and TooltipEngine.RenderSetItem passes it.
-                SetItemTooltipInput setInput = ReadSetInput(testCase);
+                SetItemTooltipInput setInput = ReadSetInput(testCase, record, wearer);
 
                 SortedDictionary<int, int> stats =
                     ItemStatReader.ReconstructView(record, ItemStatView.Equipped());
@@ -125,6 +133,30 @@ namespace D2ItemToolkit.Tools
                     .Append(", \"base\": ").Append(Pack(baseStats))
                     .Append(", \"modifiers\": ").Append(Pack(modifierStats))
                     .Append("}");
+
+                // The roll-range reconstruction. It reaches property handlers no rendering path
+                // touches — the affix, unique, runeword and superior codes — so without it those
+                // branches are invisible to the differential, which is exactly how the colour-3
+                // marker gap survived.
+                // isEquipped is threaded through rather than defaulted, so the recalc-discard arm
+                // is exercised here too.
+                payload.Append(", \"ranges\": ").Append(
+                    PackRanges(Ranges.Reconstruct(
+                        item,
+                        modifierStats,
+                        SocketStats.FillerProperties(record, setInput.IsEquipped),
+                        // The tiers the WEARER has earned, not null. Passing null left
+                        // RollSources.SetBonus reached by zero of the 935 cases, so the whole
+                        // earned-set fold sat outside the differential.
+                        Engine.EarnedSetIdsOf(wearer))));
+
+                // The two opt-in render modes, as text. Without these the annotation formatter, the
+                // range colour and the socket-block layout are all outside the differential —
+                // exercised only by hand-written tests on each side, which cannot catch the two
+                // implementations agreeing to differ.
+                payload.Append(", \"annotated\": ").Append(Quote(Annotated(record, wearer)));
+                payload.Append(", \"socketsSplit\": ").Append(Quote(SocketsSplit(record, wearer)));
+                payload.Append(", \"breakdown\": ").Append(Breakdown(record, wearer));
 
                 var sections = new RecordSections(
                     Data, Items, Types, item, viewer, stats,
@@ -222,18 +254,19 @@ namespace D2ItemToolkit.Tools
         }
 
         /// <summary>
-        /// The optional `set` object of a corpus case — everything ITEM_BuildSetItemTooltip needs
-        /// that the item document cannot say.
+        /// The explicit override when a case carries a `set` member, and otherwise whatever the
+        /// VIEWER implies — mirroring Render, which derives rather than defaulting to "none". A case
+        /// with no `set` and no viewer still gets the empty input.
         /// </summary>
-        private static SetItemTooltipInput ReadSetInput(JsonElement testCase)
+        private static SetItemTooltipInput ReadSetInput(JsonElement testCase, Unit record, Unit wearer)
         {
-            var input = new SetItemTooltipInput();
-
             JsonElement set;
             if (!testCase.TryGetProperty("set", out set))
             {
-                return input;
+                return Engine.SetStateOf(record, wearer);
             }
+
+            var input = new SetItemTooltipInput();
 
             JsonElement value;
 
@@ -307,6 +340,97 @@ namespace D2ItemToolkit.Tools
                 + ", \"partialText\": " + Quote(content.PartialText) + "}";
         }
 
+        /// <summary>
+        /// The item rendered with ShowRolledRanges on and a distinct RangeColor, so the composite
+        /// formatter, the decoded packed values and the marker wrapping are all compared.
+        /// </summary>
+        private static string Annotated(Unit record, Unit wearer)
+        {
+            var options = new TooltipOptions();
+            options.ShowRolledRanges = true;
+            options.RangeColor = ItemTooltipColor.White;
+
+            return Engine.Render(record, wearer, options).ColoredText;
+        }
+
+        /// <summary>
+        /// The item rendered with its fillers split out, ranges on — so the block order, the
+        /// per-filler headers and the jewel-versus-gem range choice are all compared.
+        /// </summary>
+        private static string SocketsSplit(Unit record, Unit wearer)
+        {
+            var options = new TooltipOptions();
+            options.SeparateSocketContributions = true;
+            options.ShowRolledRanges = true;
+
+            return Engine.Render(record, wearer, options).ColoredText;
+        }
+
+        /// <summary>
+        /// The four buckets with ranges on. Breakdown was outside the differential entirely, which
+        /// left its per-bucket span choice — the item's own for three of them, the fillers' for the
+        /// fourth — checked only by hand-written tests on each side.
+        /// </summary>
+        private static string Breakdown(Unit record, Unit wearer)
+        {
+            var options = new TooltipOptions();
+            options.ShowRolledRanges = true;
+
+            TooltipBreakdown b = Engine.Breakdown(record, wearer, options);
+
+            return "{\"base\": " + PackTexts(b.Base)
+                + ", \"magic\": " + PackTexts(b.Magic)
+                + ", \"sockets\": " + PackTexts(b.Sockets)
+                + ", \"setBonuses\": " + PackTexts(b.SetBonuses) + "}";
+        }
+
+        private static string PackTexts(IReadOnlyList<ItemTooltipLine> lines)
+        {
+            var texts = new List<string>();
+            foreach (ItemTooltipLine line in lines)
+            {
+                // "" rather than Quote's null: the TypeScript side coalesces a null text to the
+                // empty string, and a JSON null here would make the two disagree on a line no case
+                // currently produces.
+                texts.Add(Quote(line.Text ?? string.Empty));
+            }
+
+            return "[" + string.Join(", ", texts) + "]";
+        }
+
+        private static string PackRanges(ItemRollRanges ranges)
+        {
+            var stats = new List<string>();
+            foreach (RolledStatRange range in ranges.Stats)
+            {
+                stats.Add("{\"stat\": " + range.StatId
+                    + ", \"layer\": " + range.Layer
+                    + ", \"low\": " + range.Low
+                    + ", \"high\": " + range.High
+                    + ", \"sources\": " + (int)range.Sources + "}");
+            }
+
+            var layers = new List<string>();
+            foreach (RolledLayerRange range in ranges.LayerVaries)
+            {
+                layers.Add("{\"stat\": " + range.StatId
+                    + ", \"layerLow\": " + range.LayerLow
+                    + ", \"layerHigh\": " + range.LayerHigh
+                    + ", \"value\": " + range.Value
+                    + ", \"sources\": " + (int)range.Sources + "}");
+            }
+
+            return "{\"stats\": [" + string.Join(", ", stats)
+                + "], \"layerVaries\": [" + string.Join(", ", layers)
+                + "], \"outOfRange\": [" + string.Join(", ", ranges.OutOfRange)
+                + "], \"unattributed\": [" + string.Join(", ", ranges.Unattributed)
+                + "], \"itemLevelDependent\": [" + string.Join(", ", ranges.ItemLevelDependent)
+                + "], \"unsupportedFuncs\": [" + string.Join(", ", ranges.UnsupportedFuncs)
+                + "], \"craftedRecipeUnknown\": "
+                + (ranges.CraftedRecipeUnknown ? "true" : "false")
+                + ", \"craftedRecipe\": " + ranges.CraftedRecipe + "}";
+        }
+
         private static string Pack(SortedDictionary<int, int> view)
         {
             var parts = new List<string>();
@@ -355,7 +479,11 @@ namespace D2ItemToolkit.Tools
             var parts = new List<string>();
             foreach (ItemTooltipLine line in lines)
             {
+                // StatId and Layer are public members a caller reads, and they were NOT compared:
+                // one implementation decoded the damage line's layer a second time and reported 0
+                // for every line, which nothing here could see.
                 parts.Add("{\"section\": \"" + line.Section + "\", \"color\": " + line.Color
+                    + ", \"statId\": " + line.StatId + ", \"layer\": " + line.Layer
                     + ", \"text\": " + Quote(line.Text) + "}");
             }
 

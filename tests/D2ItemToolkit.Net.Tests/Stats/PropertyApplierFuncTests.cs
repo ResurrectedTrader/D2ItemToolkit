@@ -407,5 +407,210 @@ namespace D2ItemToolkit.Tests
         {
             Assert.Null(Stat(Apply("dmg-fire", "cap", 3, 14), StatPoisonCount));
         }
+
+        // ---- the seven funcs the affix, unique, set, runeword and cube tables reach -------------
+
+        private static int? Layered(Dictionary<int, int> stats, int layer, int statId)
+        {
+            int value;
+            return stats.TryGetValue(ItemStatReader.PackStatKey(layer, statId), out value)
+                ? (int?)value
+                : null;
+        }
+
+        [Theory]
+        // Amazon's three tabs are params 0..2, so class 0 packs flat.
+        [InlineData(0, 0)]
+        [InlineData(1, 1)]
+        [InlineData(2, 2)]
+        // Param 3 is the next class's first tab, and the stride jumps to 8 rather than 3.
+        [InlineData(3, 8)]
+        [InlineData(5, 10)]
+        // 20 is the highest param shipped — assassin's third tab.
+        [InlineData(20, 50)]
+        public void Func_ten_packs_the_skill_tab_as_class_times_eight_plus_tab(int param, int layer)
+        {
+            // `skilltab` is a lone func 10 onto stat 188, and 148 cells across MagicPrefix,
+            // automagic, UniqueItems, SetItems and Runes reach it.
+            Dictionary<int, int> stats = Apply("skilltab", "cap", 2, 2, param);
+
+            Assert.Equal(new[] { 188 }, Ids(stats));
+            Assert.Equal(2, Layered(stats, layer, 188));
+        }
+
+        [Fact]
+        public void Func_twelve_rolls_the_layer_and_takes_the_value_from_the_param()
+        {
+            // Ormus' Robes, the only shipped `skill-rand`: par=3, min=36, max=60. The +3 is the
+            // VALUE and the rolled skill id is the LAYER — 36..60 being the sorceress skills — so
+            // the low end of the roll lands on 36.
+            Dictionary<int, int> stats = Apply("skill-rand", "uui", 36, 60, 3);
+
+            Assert.Equal(new[] { 107 }, Ids(stats));
+            Assert.Equal(3, Layered(stats, 36, 107));
+
+            // Not the other way round: a value of 36 at layer 3 is the bug this pins.
+            Assert.Null(Layered(stats, 3, 107));
+        }
+
+        [Fact]
+        public void Func_thirty_six_rolls_the_layer_and_takes_the_value_from_val()
+        {
+            // Hellfire Torch, the only shipped `randclassskill`: min=0, max=6 over the seven
+            // classes, and the value comes from Properties.txt val1, which is 3.
+            Dictionary<int, int> stats = Apply("randclassskill", "cm2", 0, 6);
+
+            Assert.Equal(new[] { 83 }, Ids(stats));
+            Assert.Equal(3, Layered(stats, 0, 83));
+        }
+
+        [Fact]
+        public void Func_twenty_three_writes_no_stat_at_all()
+        {
+            // `ethereal` has a blank stat1: the handler flips a flag and applies the ethereal
+            // bonus, so nothing reaches a stat list. Ethereal Edge is one of the five users.
+            Assert.Empty(Apply("ethereal", "7ba", 0, 0));
+        }
+
+        [Fact]
+        public void Func_eighteen_packs_both_ends_into_one_value()
+        {
+            // "of Dawn" is `ac/time` 10..40 onto stat 268. Both ends are biased by +256 and packed
+            // as param + 4 * ((max << 10) + min), so the stat carries its own range.
+            Dictionary<int, int> stats = Apply("ac/time", "cap", 10, 40);
+
+            Assert.Equal(new[] { 268 }, Ids(stats));
+
+            const int Low = 10 + 256;
+            const int High = 40 + 256;
+            Assert.Equal(4 * ((High << 10) + Low), Stat(stats, 268));
+
+            // And the packing is recoverable, which is the whole point of the encoding.
+            int? written = Stat(stats, 268);
+            Assert.NotNull(written);
+            int packed = written.GetValueOrDefault();
+            Assert.Equal(0, packed & 3);
+            Assert.Equal(10, ((packed >> 2) & 0x3FF) - 256);
+            Assert.Equal(40, ((packed >> 12) & 0x3FF) - 256);
+        }
+
+        [Fact]
+        public void Func_eighteen_biases_a_negative_end_rather_than_dropping_it()
+        {
+            // "of Sunlight" is the other shipped user and its min is NEGATIVE (-10..60), which the
+            // +256 bias is there to carry.
+            Dictionary<int, int> stats = Apply("ac/time", "cap", -10, 60);
+
+            int? written = Stat(stats, 268);
+            Assert.NotNull(written);
+            int packed = written.GetValueOrDefault();
+            Assert.Equal(-10, ((packed >> 2) & 0x3FF) - 256);
+            Assert.Equal(60, ((packed >> 12) & 0x3FF) - 256);
+        }
+
+        [Fact]
+        public void Func_nineteen_packs_the_charge_pair_and_the_skill_level()
+        {
+            // Hellfire Torch's `charged`: param is the skill (Hydra, 62), min the charge count and
+            // max the level. Level 30 comes straight from max, the value packs
+            // (maxCharges << 8) + current, and the layer packs (skill << 6) + level.
+            Dictionary<int, int> stats = Apply("charged", "cm2", 10, 30, 62);
+
+            Assert.Equal(new[] { 204 }, Ids(stats));
+
+            const int Skill = 62;
+            const int Level = 30;
+            const int MaxCharges = 10;
+
+            // Low end of the seed-drawn current count is maxCharges / 8 + 1.
+            Assert.Equal(
+                (MaxCharges << 8) + (MaxCharges / 8 + 1),
+                Layered(stats, (Skill << 6) + Level, 204));
+        }
+
+        [Fact]
+        public void Func_nineteen_resolves_the_current_charges_to_the_requested_end()
+        {
+            // The current count is the only seed-drawn part, so the two ends bracket it while the
+            // high byte — the max charges — stays put.
+            var into = new Dictionary<int, int>();
+            var high = new PropertyApplier(Data, Items, Types, RollEnd.High);
+            high.Apply(
+                PropertyApplier.PropModeGem, Item("cm2"),
+                Property(high, "charged", 62, 10, 30), into);
+
+            Assert.Equal((10 << 8) + 10, Layered(into, (62 << 6) + 30, 204));
+        }
+
+        [Fact]
+        public void Func_nineteen_reports_the_arms_that_need_an_item_level()
+        {
+            // A non-positive max derives the level from the item's own level (0x65f70a / 0x65f75b),
+            // which a record does not carry — so it takes the game's floor of 1 and is reported.
+            var into = new Dictionary<int, int>();
+            PropertyApplier applier = Applier();
+            ItemProperty property = Property(applier, "charged", 62, 10, 0);
+            applier.Apply(PropertyApplier.PropModeGem, Item("cm2"), property, into);
+
+            Assert.Contains(property.PropertyId, applier.ItemLevelDependent);
+            Assert.Equal((10 << 8) + 2, Layered(into, (62 << 6) + 1, 204));
+        }
+
+        [Fact]
+        public void Func_fourteen_caps_the_socket_count_by_the_items_own_limits()
+        {
+            // A cap is 2x2, so the footprint allows 4, but items.txt gemsockets is 2 — so a roll
+            // of 3 clamps to 2 and lands on stat 194 as a SET.
+            Dictionary<int, int> stats = Apply("sock", "cap", 3, 3);
+
+            Assert.Equal(new[] { 194 }, Ids(stats));
+            Assert.Equal(2, Stat(stats, 194));
+        }
+
+        [Fact]
+        public void Func_fourteen_writes_nothing_on_a_base_that_takes_no_sockets()
+        {
+            // mbl (heavy boots) has gemsockets 0, so ITEM_GetMaxSockCount returns min(0, tier) = 0
+            // whatever the item level, the cap collapses to 0 and 0x65f679 falls through to write
+            // nothing. Getting this wrong puts sockets on every pair of boots.
+            Assert.Empty(Apply("sock", "mbl", 3, 3));
+        }
+
+        [Fact]
+        public void Func_fourteen_reports_that_the_tier_cap_needs_an_item_level()
+        {
+            // ITEM_GetMaxSockCount 0x62bc20 picks MaxSock1/25/40 by item level, which a record does
+            // not carry, so that half of the cap is reported rather than guessed.
+            var into = new Dictionary<int, int>();
+            PropertyApplier applier = Applier();
+            ItemProperty property = Property(applier, "sock", 0, 3, 3);
+            applier.Apply(PropertyApplier.PropModeGem, Item("cap"), property, into);
+
+            Assert.Contains(property.PropertyId, applier.ItemLevelDependent);
+        }
+
+        [Fact]
+        public void None_of_the_seven_reports_itself_unsupported_any_more()
+        {
+            foreach (var probe in new[]
+            {
+                new { Code = "skilltab", Item = "cap", Min = 1, Max = 1, Param = 0 },
+                new { Code = "skill-rand", Item = "uui", Min = 36, Max = 60, Param = 3 },
+                new { Code = "randclassskill", Item = "cm2", Min = 0, Max = 6, Param = 0 },
+                new { Code = "ethereal", Item = "7ba", Min = 0, Max = 0, Param = 0 },
+                new { Code = "ac/time", Item = "cap", Min = 10, Max = 40, Param = 0 },
+                new { Code = "charged", Item = "cm2", Min = 10, Max = 30, Param = 62 },
+                new { Code = "sock", Item = "cap", Min = 3, Max = 3, Param = 0 },
+            })
+            {
+                var into = new Dictionary<int, int>();
+                PropertyApplier applier = Applier();
+                applier.Apply(
+                    PropertyApplier.PropModeGem, Item(probe.Item),
+                    Property(applier, probe.Code, probe.Param, probe.Min, probe.Max), into);
+
+                Assert.Empty(applier.UnsupportedFunc);
+            }
+        }
     }
 }

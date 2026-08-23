@@ -159,10 +159,32 @@ namespace D2ItemToolkit
 
         public int StatId;
 
+        /// <summary>
+        /// The stat's layer — the skill, class or tab the line is about. Carried alongside
+        /// <see cref="StatId"/> so a caller can match a rendered line back to one stat KEY rather
+        /// than to a stat id that several skills share.
+        /// </summary>
+        public int Layer;
+
         public int Value;
 
         public int DescPriority;
         public bool IsGroup;
+
+        /// <summary>
+        /// The line speaks for MORE than the one stat in <see cref="StatId"/> — a DescGrp variant
+        /// ("+2 to all Attributes") or an aggregated damage line ("Adds 1-4 cold damage", which is
+        /// coldmindam and coldmaxdam together).
+        /// </summary>
+        public bool Aggregated;
+
+        /// <summary>
+        /// Every stat this line displays a number for, in the order the numbers appear. Null means
+        /// just <see cref="StatId"/>. This is what lets a roll range be shown against an aggregated
+        /// line as the composite it is — "Adds 1-4 cold damage" spans two stats and so wants two
+        /// spans — rather than being suppressed for want of a single answer.
+        /// </summary>
+        public int[] ShownStats;
 
         public bool PreJoined;
 
@@ -372,8 +394,15 @@ namespace D2ItemToolkit
                         var damageLine = new ItemDescriptionLine();
                         damageLine.Text = aggregated;
                         damageLine.StatId = statId;
+                        // entry.Key IS the layer — `entries` is built as (layer, value) above.
+                        // Decoding it again gave `layer >> 16`, which is 0 for every layer the
+                        // 16-bit pack can hold, so this always reported 0 where the TypeScript
+                        // peer reported the real layer.
+                        damageLine.Layer = entry.Key;
                         damageLine.Value = entry.Value;
                         damageLine.PreJoined = true;
+                        damageLine.Aggregated = ItemDamageAggregate.ShowsSeveralValues(statId);
+                        damageLine.ShownStats = ItemDamageAggregate.StatsShownBy(statId);
                         lines.Add(damageLine);
                         continue;
                     }
@@ -617,9 +646,30 @@ namespace D2ItemToolkit
             var line = new ItemDescriptionLine();
             line.Text = text;
             line.StatId = descriptor.StatId;
+            line.Layer = c.Layer;
             line.Value = c.Value;
             line.DescPriority = descriptor.DescPriority;
             line.IsGroup = grouped;
+            line.Aggregated = grouped;
+
+            // A DescGrp line prints ONE number for the whole group, so every member shares it and
+            // shares its span. Naming them all lets the formatter see they agree and collapse to a
+            // single span rather than repeating it four times.
+            if (grouped)
+            {
+                IReadOnlyList<int> members = _stats.GetStatsInDescGroup(descriptor.DescGrp);
+                if (members != null && members.Count != 0)
+                {
+                    var shown = new int[members.Count];
+                    for (int at = 0; at < members.Count; ++at)
+                    {
+                        shown[at] = members[at];
+                    }
+
+                    line.ShownStats = shown;
+                }
+            }
+
             return line;
         }
 

@@ -35,7 +35,7 @@ namespace D2ItemToolkit.Tests
             return Unit.FromJson(
                 "{ \"unitType\": 4, \"classId\": "
                 + ClassId(hostCode).ToString(CultureInfo.InvariantCulture)
-                + ", \"quality\": 2, \"itemFlags\": 2064, \"statsLists\": [], \"sockets\": ["
+                + ", \"quality\": 2, \"itemFlags\": 2064, \"statsLists\": [], \"items\": ["
                 + string.Join(", ", sockets.ToArray()) + "] }");
         }
 
@@ -90,7 +90,7 @@ namespace D2ItemToolkit.Tests
             // those would count the gem twice, so a filler with a chain of its own is not touched.
             Unit item = Unit.FromJson(
                 "{ \"unitType\": 4, \"classId\": " + ClassId("urg")
-                + ", \"quality\": 2, \"itemFlags\": 2064, \"statsLists\": [], \"sockets\": ["
+                + ", \"quality\": 2, \"itemFlags\": 2064, \"statsLists\": [], \"items\": ["
                 + "{ \"unitType\": 4, \"classId\": " + ClassId("r18")
                 + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 64, "
                 + "\"stats\": [ { \"id\": 2, \"value\": 10 } ] } ] } ] }");
@@ -118,7 +118,7 @@ namespace D2ItemToolkit.Tests
             Unit worn = Unit.FromJson(
                 "{ \"unitType\": 4, \"classId\": " + ClassId("xsk")
                 + ", \"quality\": 5, \"itemFlags\": 2064, \"fileIndex\": 80, "
-                + "\"statsLists\": [], \"sockets\": ["
+                + "\"statsLists\": [], \"items\": ["
                 + "{ \"unitType\": 4, \"classId\": " + ClassId("r22") + " } ] }");
 
             var equipped = new SetItemTooltipInput();

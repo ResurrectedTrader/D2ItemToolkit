@@ -36,7 +36,7 @@ export interface UnitSkill {
 /**
  * A captured D2UnitStrc. An item and a player are the same struct in the game, so both
  * deserialise to this one type; a socket filler is another whole unit, and its POSITION in
- * `sockets` is the socket index.
+ * `items` is the socket index.
  *
  * This mirrors the producer's document field for field. It carries no classification: the engine
  * derives base / item-mod / set-tier from `flags` and `stateNo`, and a `source` field here would
@@ -56,6 +56,17 @@ export interface Unit {
    * SetItems row, a monstats row for a body part, or a character class for an ear.
    */
   fileIndex: number;
+
+  /**
+   * dwItemLevel (+0x2C). **-1 means the capture did not record it**, which is not the same as 0 —
+   * the game's own floor for a spawned item is 1.
+   *
+   * Nothing the tooltip WRITERS do needs this; it is here for the property handlers that derive a
+   * value from it and otherwise have to report themselves instead: the skill level behind funcs 11
+   * and 19 when a property's max is non-positive (0x65f4de, 0x65f514, 0x65f70a, 0x65f75b), and
+   * func 14's socket cap, which picks MaxSock1/MaxSock25/MaxSock40 by level (0x62bc81, 0x62bc8c).
+   */
+  itemLevel: number;
   rarePrefix: number;
   rareSuffix: number;
   autoAffix: number;
@@ -103,11 +114,41 @@ export interface Unit {
    */
   stats: UnitStat[];
   /**
-   * Contained units in socket-ordinal order. Only an item nests: a player's chain carries an
-   * extended child per equipped piece, and nesting those would re-serialise the wearer's whole
-   * kit inside one item.
+   * The units this one contains — one relation, not two. On an ITEM those are its socket fillers,
+   * in socket-ordinal order, and position IS the socket index. On a WEARER they are the items it
+   * carries, which is what lets the library derive set state instead of asking a caller for masks.
+   * That is ONE field carrying TWO relations, and a reader that recurses — as a socket reader must —
+   * has to tell them apart: run a wearer through it and every carried item's stats fold into the
+   * wearer's own. `enumerateOwnGroups` exists for exactly that.
+   *
+   * One level only. A filler is a socket of a carried item, so it sits one deeper than anything
+   * reached by scanning a wearer, and no set item is socketable.
+   *
+   * The Horadric Cube is the case that does not fit: it is an item that holds items rather than
+   * fillers. Nothing models cube contents today; if that changes, this field means two relations.
    */
-  sockets: Unit[];
+  items: Unit[];
+
+  /**
+   * pItemData's item location: 0 ground, 1 equipped, 2 belt, 3 inventory, 4 store, 5 trade,
+   * 6 cube, 7 stash. -1 when the capture did not record one.
+   *
+   * NOT the unit's dwAnimMode, which is what the full-set block is really gated on (0x48d870). A
+   * capture cannot reach animMode, so `setStateOf` substitutes `location === 1` — deliberately, and
+   * the only option on the wire. Whether the two always agree is untraced.
+   */
+  location: number;
+
+  /**
+   * The grid column, and the EQUIP LOCATION 1..12 when `location` is equipped. One field carrying
+   * both is what the capture puts on the wire.
+   *
+   * 11 and 12 are the alternate weapon set (0x55f240), and INVENTORY_PlaceItemInGrid stamps the
+   * grid type as `(bodyLoc >= 11) ? 4 : 3` (0x63b1e2) — so a set piece on swap is OWNED but lights
+   * no worn bit.
+   */
+  x: number;
+
   /**
    * A viewer's skills and their BONUSED levels. This is the one thing a stat capture cannot
    * reach — SKILLS_GetSkillLevel reads it off the skill list (0x485df1 passes bBonus = 1).
@@ -124,6 +165,7 @@ export function createUnit(overrides: Partial<Unit> = {}): Unit {
     quality: 0,
     itemFlags: 0,
     fileIndex: -1,
+    itemLevel: -1,
     rarePrefix: 0,
     rareSuffix: 0,
     autoAffix: 0,
@@ -136,7 +178,9 @@ export function createUnit(overrides: Partial<Unit> = {}): Unit {
     flagsEx: UnitFlagExpansion,
     statsLists: [],
     stats: [],
-    sockets: [],
+    items: [],
+    location: -1,
+    x: 0,
     skills: [],
     ...overrides,
   };
@@ -161,6 +205,7 @@ function readUnit(value: unknown): Unit {
     quality: int(o, 'quality', 0),
     itemFlags: uint(o, 'itemFlags', 0),
     fileIndex: int(o, 'fileIndex', -1),
+    itemLevel: int(o, 'itemLevel', -1),
     rarePrefix: int(o, 'rarePrefix', 0),
     rareSuffix: int(o, 'rareSuffix', 0),
     autoAffix: int(o, 'autoAffix', 0),
@@ -173,7 +218,9 @@ function readUnit(value: unknown): Unit {
     flagsEx: uint(o, 'flagsEx', UnitFlagExpansion),
     statsLists: array(o, 'statsLists').map(readStatList),
     stats: array(o, 'stats').map(readMergedStat),
-    sockets: array(o, 'sockets').map(readUnit),
+    items: array(o, 'items').map(readUnit),
+    location: int(o, 'location', -1),
+    x: int(o, 'x', 0),
     skills: array(o, 'skills').map(skill => {
       const s = asObject(skill);
       return { skill: int(s, 'skill', -1), level: int(s, 'level', 0) };

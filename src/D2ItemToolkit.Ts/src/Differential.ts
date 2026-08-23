@@ -21,6 +21,9 @@ import {
   type SetItemTooltipInput,
 } from './Tooltip/SetItemTooltip.js';
 import { SocketStatSynthesis } from './Stats/SocketStatSynthesis.js';
+import { TooltipEngine } from './Tooltip/TooltipEngine.js';
+import { MagicAffixTable } from './Tables/MagicAffixTable.js';
+import { RolledRangeReconstructor, type ItemRollRanges } from './Stats/RolledRangeReconstructor.js';
 import { Int32 } from './Types.js';
 
 // The differential harness. NOT part of the package's public surface — it deliberately reaches
@@ -41,10 +44,40 @@ export interface RenderedRecord {
     partialText: string;
   } | null;
   sections?: Record<string, string>;
-  lines?: { section: string; color: number; text: string }[];
+  lines?: { section: string; color: number; statId: number; layer: number; text: string }[];
   rendered?: string;
   colored?: string;
+  ranges?: PackedRanges;
+  annotated?: string;
+  socketsSplit?: string;
+  breakdown?: PackedBreakdown;
   error?: string;
+}
+
+/** The `ranges` object, shaped to match `PackRanges` in tools/Reference/Program.cs exactly. */
+interface PackedRanges {
+  stats: { stat: number; layer: number; low: number; high: number; sources: number }[];
+  layerVaries: {
+    stat: number;
+    layerLow: number;
+    layerHigh: number;
+    value: number;
+    sources: number;
+  }[];
+  outOfRange: number[];
+  unattributed: number[];
+  itemLevelDependent: number[];
+  unsupportedFuncs: number[];
+  craftedRecipeUnknown: boolean;
+  craftedRecipe: number;
+}
+
+/** The four breakdown buckets as text, matching `Breakdown` in tools/Reference/Program.cs. */
+interface PackedBreakdown {
+  base: string[];
+  magic: string[];
+  sockets: string[];
+  setBonuses: string[];
 }
 
 /** The optional `set` object of a corpus case, mirroring `ReadSetInput` on the C# side. */
@@ -83,6 +116,58 @@ function tables(): {
     types: cachedTypes as ItemTypeTree,
     socketStats: cachedSocketStats as SocketStatSynthesis,
     sets: cachedSets as SetTable,
+  };
+}
+
+let cachedRanges: RolledRangeReconstructor | null = null;
+
+function ranges(): RolledRangeReconstructor {
+  if (cachedRanges === null) {
+    const { data, items, types, sets } = tables();
+    cachedRanges = new RolledRangeReconstructor(
+      data,
+      items,
+      types,
+      new MagicAffixTable(data),
+      sets,
+    );
+  }
+
+  return cachedRanges;
+}
+
+let cachedEngine: TooltipEngine | null = null;
+
+function engine(): TooltipEngine {
+  if (cachedEngine === null) {
+    cachedEngine = TooltipEngine.fromData(tables().data);
+  }
+
+  return cachedEngine;
+}
+
+function packRanges(source: ItemRollRanges): PackedRanges {
+  return {
+    stats: source.stats.map(r => ({
+      stat: r.statId,
+      layer: r.layer,
+      low: r.low,
+      high: r.high,
+      sources: r.sources,
+    })),
+    layerVaries: source.layerVaries.map(r => ({
+      stat: r.statId,
+      layerLow: r.layerLow,
+      layerHigh: r.layerHigh,
+      value: r.value,
+      sources: r.sources,
+    })),
+    outOfRange: [...source.outOfRange],
+    unattributed: [...source.unattributed],
+    itemLevelDependent: [...source.itemLevelDependent],
+    unsupportedFuncs: [...source.unsupportedFuncs],
+    craftedRecipeUnknown: source.craftedRecipeUnknown,
+    craftedRecipe: source.craftedRecipe,
   };
 }
 
@@ -127,14 +212,19 @@ function packSections(sections: RecordSections): Record<string, string> {
   return packed;
 }
 
-function packLines(
-  lines: readonly ItemTooltipLine[],
-): { section: string; color: number; text: string }[] {
-  const packed: { section: string; color: number; text: string }[] = [];
+type PackedLine = { section: string; color: number; statId: number; layer: number; text: string };
+
+// statId and layer are public members a caller reads, and they were NOT compared: one
+// implementation decoded the damage line's layer a second time and reported 0 for every line,
+// which nothing here could see.
+function packLines(lines: readonly ItemTooltipLine[]): PackedLine[] {
+  const packed: PackedLine[] = [];
   for (const line of lines) {
     packed.push({
       section: line.section,
       color: line.color,
+      statId: line.statId,
+      layer: line.layer,
       text: line.text as string,
     });
   }
@@ -187,9 +277,14 @@ function refusal(
 }
 
 /** Mirrors `ReadSetInput`: everything ITEM_BuildSetItemTooltip needs that the record cannot say. */
-function readSetInput(set: unknown): SetItemTooltipInput {
+/**
+ * The explicit override when a case carries a `set` member, and otherwise whatever the VIEWER
+ * implies — mirroring render, which derives rather than defaulting to "none". A case with no `set`
+ * and no viewer still gets the empty input.
+ */
+function readSetInput(set: unknown, record: Unit, wearer: Unit | null): SetItemTooltipInput {
   if (set === null || set === undefined || typeof set !== 'object') {
-    return {};
+    return engine().setStateOf(record, wearer);
   }
 
   const source = set as CorpusSetInput;
@@ -256,7 +351,7 @@ export function renderRecord(
     // Read BEFORE the socket synthesis: ITEM_RecalcAllEquippedItems 0x4c1350 throws an equipped
     // set item's fillers away (0x4c1658 / 0x4c1661), so `isEquipped` decides whether there is a
     // contribution at all and TooltipEngine.renderSetItem passes it.
-    const setInput = readSetInput(set);
+    const setInput = readSetInput(set, unit, wearer);
 
     let stats = ItemStatReader.reconstructView(unit, ItemStatView.equipped());
     const baseStats = ItemStatReader.reconstructView(unit, ItemStatView.baseOnly());
@@ -276,6 +371,49 @@ export function renderRecord(
       base: pack(baseStats),
       modifiers: pack(modifierStats),
     };
+
+    // The two opt-in render modes, as text. Without these the annotation formatter, the range
+    // colour and the socket-block layout are all outside the differential — exercised only by
+    // hand-written tests on each side, which cannot catch the two implementations agreeing to
+    // differ.
+    payload.annotated = engine().render(unit, wearer, {
+      showRolledRanges: true,
+      rangeColor: ItemTooltipColor.White,
+    }).coloredText;
+
+    payload.socketsSplit = engine().render(unit, wearer, {
+      separateSocketContributions: true,
+      showRolledRanges: true,
+    }).coloredText;
+
+    // Breakdown was outside the differential entirely, which left its per-bucket span choice — the
+    // item's own for three of them, the fillers' for the fourth — checked only by hand-written
+    // tests on each side.
+    const b = engine().breakdown(unit, wearer, { showRolledRanges: true });
+    const texts = (lines: readonly { text: string | null }[]): string[] =>
+      lines.map(l => l.text ?? '');
+
+    payload.breakdown = {
+      base: texts(b.base),
+      magic: texts(b.magic),
+      sockets: texts(b.sockets),
+      setBonuses: texts(b.setBonuses),
+    };
+
+    // The roll-range reconstruction. It reaches property handlers no rendering path touches — the
+    // affix, unique, runeword and superior codes — so without it those branches are invisible to
+    // the differential, which is exactly how the colour-3 marker gap survived. isEquipped is
+    // threaded through rather than defaulted, so the recalc-discard arm is exercised here too.
+    payload.ranges = packRanges(
+      ranges().reconstruct(
+        item,
+        modifierStats,
+        socketStats.fillerProperties(unit, setInput.isEquipped ?? false),
+        // The tiers the WEARER has earned, not null. Passing null left RollSources.SetBonus reached
+        // by zero of the 935 cases, so the whole earned-set fold sat outside the differential.
+        engine().earnedSetIdsOf(wearer),
+      ),
+    );
 
     const sections = new RecordSections(
       data,

@@ -54,7 +54,7 @@ namespace D2ItemToolkit
             // quality affixes and its stats 107/97/92 all reach the host.
             foreach (ItemUnit filler in Fillers(socketUnits, sockets))
             {
-                int required = Calculate(filler.Identity, viewer, filler.Stats, filler.Sockets);
+                int required = Calculate(filler.Identity, viewer, filler.Stats, filler.Items);
                 if (required > result)
                 {
                     result = required;

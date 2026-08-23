@@ -20,6 +20,8 @@ namespace D2ItemToolkit.Tools
         private static readonly ItemTable Items = new ItemTable(
             Data.Weapons, Data.Armor, Data.Misc);
 
+        private static readonly MagicAffixTable Affixes = new MagicAffixTable(Data);
+
         public static int Main(string[] args)
         {
             if (args.Length < 1)
@@ -37,6 +39,10 @@ namespace D2ItemToolkit.Tools
             AddThinSectionCases(cases);
             AddSetItemCases(cases);
             AddDescPriorityTieCases(cases);
+            AddRollRangeCases(cases);
+            AddCraftedRecipeCases(cases);
+            AddSetDerivationCases(cases);
+            AddSelfStatFillerCases(cases);
 
             File.WriteAllText(args[0], "[\n  " + string.Join(",\n  ", cases) + "\n]\n");
             Console.WriteLine(cases.Count + " cases");
@@ -97,7 +103,7 @@ namespace D2ItemToolkit.Tools
                     + "\"itemFlags\": " + (16 | 0x800) + ", "
                     + "\"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
                     + "\"stats\": [ { \"id\": 31, \"value\": 100 }, { \"id\": 194, \"value\": 1 } ] } ], "
-                    + "\"sockets\": [ { \"unitType\": 4, \"classId\": " + fillerId + ", "
+                    + "\"items\": [ { \"unitType\": 4, \"classId\": " + fillerId + ", "
                     + "\"statsLists\": [ { \"stateNo\": 0, \"flags\": 64, "
                     + "\"stats\": [ { \"id\": 39, \"value\": 30 } ] } ] } ] }",
                     null));
@@ -137,7 +143,7 @@ namespace D2ItemToolkit.Tools
                         + "\"itemFlags\": " + (16 | 0x800) + ", "
                         + "\"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
                         + "\"stats\": [ { \"id\": 31, \"value\": 100 } ] } ], "
-                        + "\"sockets\": [ "
+                        + "\"items\": [ "
                         + "{ \"unitType\": 4, \"classId\": " + fillerId + " }, "
                         + "{ \"unitType\": 4, \"classId\": " + fillerId + " } ] }",
                         Player(3, 50)));
@@ -281,7 +287,7 @@ namespace D2ItemToolkit.Tools
                     + "\"itemFlags\": " + (16 | 0x800) + ", "
                     + "\"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
                     + "\"stats\": [ { \"id\": 194, \"value\": " + runes + " } ] } ], "
-                    + "\"sockets\": [" + string.Join(", ", fillers) + "] }",
+                    + "\"items\": [" + string.Join(", ", fillers) + "] }",
                     Player(3, 50)));
             }
 
@@ -541,7 +547,7 @@ namespace D2ItemToolkit.Tools
                     + ", \"statsLists\": [ "
                     + "{ \"stateNo\": 0, \"flags\": 2147483648, \"stats\": ["
                     + "{ \"id\": 31, \"value\": 100 }, { \"id\": 194, \"value\": 1 } ] } ], "
-                    + "\"sockets\": [ { \"unitType\": 4, \"classId\": "
+                    + "\"items\": [ { \"unitType\": 4, \"classId\": "
                     + Items.ClassIdForCode("r22") + " } ] }",
                     Player(1, 70),
                     "{ \"wornMaskIncludingSelf\": 23, \"wornMaskExcludingSelf\": 7"
@@ -670,6 +676,557 @@ namespace D2ItemToolkit.Tools
                 player));
         }
 
+        /// <summary>
+        /// Cases that exist for the ROLL-RANGE reconstruction rather than for any rendered line.
+        /// Measured against the generated reference, the rest of the corpus reaches source masks
+        /// {Base, Affix, Unique, SetItem, Runeword, Socket, Superior} but leaves two things
+        /// untouched: the layer-rolling funcs 12 and 36, and every arm that needs an item level. A
+        /// branch the corpus never reaches is a branch the differential cannot police, which is how
+        /// the colour-3 marker gap survived, so those get explicit cases here.
+        /// </summary>
+        private static void AddRollRangeCases(List<string> cases)
+        {
+            // Func 12 (`skill-rand`) and func 36 (`randclassskill`) have exactly one shipped user
+            // each, so they are named rather than swept.
+            foreach (string index in new[] { "Ormus' Robes", "Hellfire Torch" })
+            {
+                int row = Data.UniqueItems.FindRow("index", index);
+                if (row < 0)
+                {
+                    continue;
+                }
+
+                int classId = Items.ClassIdForCode(Data.UniqueItems.GetString(row, "code").Trim());
+                if (classId < 0)
+                {
+                    continue;
+                }
+
+                cases.Add(Case(
+                    "layerroll-" + index.Replace("'", string.Empty).Replace(" ", string.Empty),
+                    UniqueRecord(classId, row, -1),
+                    null));
+            }
+
+            // A unique whose props are all fixed, plus one with six ranged props: the two extremes
+            // of the span logic on the same code path.
+            foreach (string index in new[] { "The Eye of Etlich", "Harlequin Crest" })
+            {
+                int row = Data.UniqueItems.FindRow("index", index);
+                int classId = row < 0
+                    ? -1
+                    : Items.ClassIdForCode(Data.UniqueItems.GetString(row, "code").Trim());
+
+                if (classId >= 0)
+                {
+                    cases.Add(Case(
+                        "ranged-" + index.Replace(" ", string.Empty),
+                        UniqueRecord(classId, row, -1),
+                        null));
+                }
+            }
+
+            // The item-level arms, on inputs where the level actually CHANGES the answer. Both were
+            // first written against a Crystal Sword and a positive-max `charged`, where neither arm
+            // binds: the socket cap was already below every MaxSock tier, and a positive max skips
+            // the level derivation entirely. Those cases plumbed the field without exercising it.
+            //
+            // `aar` is a torso with gemsockets 4 against MaxSock1 3 / MaxSock25 4 / MaxSock40 6, so
+            // the tier IS the binding constraint below level 26 and the span moves.
+            int sockAffix = FirstAffixWithCode("sock");
+            int torso = Items.ClassIdForCode("aar");
+
+            if (sockAffix > 0 && torso >= 0)
+            {
+                foreach (int itemLevel in new[] { -1, 10, 30, 70 })
+                {
+                    cases.Add(Case(
+                        "ilvl-sock-" + itemLevel,
+                        AffixRecord(torso, sockAffix, itemLevel),
+                        null));
+                }
+            }
+
+            // The socket TIER only binds when a roll EXCEEDS it, and a `sock` affix rolls 1..2 —
+            // below every tier, so an affix can never show it. Runemaster rolls 3..5 against a base
+            // whose MaxSock1 is lower, which is what makes the level move the answer.
+            int runemaster = Data.UniqueItems.FindRow("index", "Runemaster");
+            if (runemaster >= 0)
+            {
+                int baseId = Items.ClassIdForCode(
+                    Data.UniqueItems.GetString(runemaster, "code").Trim());
+
+                if (baseId >= 0)
+                {
+                    foreach (int itemLevel in new[] { -1, 10, 30, 70 })
+                    {
+                        cases.Add(Case(
+                            "ilvl-socktier-" + itemLevel,
+                            UniqueRecord(baseId, runemaster, itemLevel),
+                            null));
+                    }
+                }
+            }
+
+            // 211 of the 464 func-11/19 cells in shipped data carry a NON-POSITIVE max, which is
+            // the only arm that derives the skill level from the item's. Picking one of those is
+            // what makes the level observable.
+            int chargedAffix = FirstAffixWithNonPositiveMax("charged");
+            int crs = Items.ClassIdForCode("crs");
+
+            if (chargedAffix > 0 && crs >= 0)
+            {
+                foreach (int itemLevel in new[] { -1, 20, 60 })
+                {
+                    cases.Add(Case(
+                        "ilvl-charged-" + itemLevel,
+                        AffixRecord(crs, chargedAffix, itemLevel),
+                        null));
+                }
+            }
+
+            // Func 10's skill-tab packing and func 18's by-time triple, each on the affix that
+            // carries them.
+            foreach (string code in new[] { "skilltab", "ac/time" })
+            {
+                int affix = FirstAffixWithCode(code);
+                if (affix > 0 && crs >= 0)
+                {
+                    cases.Add(Case(
+                        "affix-" + code.Replace("/", "-"),
+                        AffixRecord(crs, affix, 55),
+                        null));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Crafted items, whose recipe the reconstruction deduces rather than reads. Nothing else in
+        /// the corpus is quality 8, so without these the slot derivation, the item-type fallback and
+        /// the all-stats-present filter are outside the differential entirely.
+        ///
+        /// Stat ids are literal because the recipes' property codes reach them by several different
+        /// routes — `dmg%` writes two stats and carries no stat1 cell at all, `gethit-skill` packs
+        /// the skill and the level into the LAYER (0x65f54f). CraftedRecipeTests pins each of them.
+        /// </summary>
+        private static void AddCraftedRecipeCases(List<string> cases)
+        {
+            const int RedDmg = 34, RedMag = 35, ResLtng = 41, AcPercent = 16;
+            const int SkillOnGetHit = 201, Thorns = 78, AcMissile = 32;
+            const int LifeSteal = 60, MaxHp = 7, Deadly = 141;
+            const int RegenMana = 27, MaxMana = 9, ManaSteal = 62, FasterCast = 105;
+            const int MinDamagePercent = 18, MaxDamagePercent = 17;
+            const int ResFire = 39;
+
+            // gethit-skill(44) at level 4 — the layer the func 11 handler packs it into.
+            const int FrostNovaOnStruck = (4 & 0x3F) + (44 << 6);
+
+            int crown = Items.ClassIdForCode("crn");
+            int axe = Items.ClassIdForCode("lax");
+            int amulet = Items.ClassIdForCode("amu");
+            int bow = Items.ClassIdForCode("swb");
+            int charm = Items.ClassIdForCode("cm1");
+
+            // A crafted item always carries affixes as well as its recipe's fixed mods, so most of
+            // these roll one and record its stat: the deduction's real job is finding the recipe
+            // among stats it does not explain, and a record with no affix never asks it to.
+            List<int> ranged = RangedAffixes("res-fire");
+
+            if (crown < 0 || axe < 0 || amulet < 0 || bow < 0 || charm < 0 || ranged.Count == 0)
+            {
+                return;
+            }
+
+            int affix = ranged[0];
+
+            // Affix-free on purpose, and the only one: the same recipe as crafted-with-affix with
+            // nothing else in the record, so a divergence between the two separates the recipe's
+            // own mods from the affix handling.
+            cases.Add(Case("crafted-safety-helm", Crafted(
+                crown, 0, Stat(RedDmg, 3), Stat(RedMag, 2), Stat(ResLtng, 8), Stat(AcPercent, 20)),
+                null));
+
+            // Func 11's stat lives on a packed layer, so this is the case that proves the match is
+            // key-aware rather than stat-id-aware.
+            cases.Add(Case("crafted-hitpower-helm", Crafted(
+                crown, affix, Stat(SkillOnGetHit, 5, FrostNovaOnStruck), Stat(Thorns, 5),
+                Stat(AcMissile, 30), Stat(ResFire, 8)),
+                null));
+
+            // A weapon: its four recipes name item TYPES, so this reaches the type-tree fallback.
+            cases.Add(Case("crafted-blood-weapon", Crafted(
+                axe, affix, Stat(LifeSteal, 3), Stat(MaxHp, 15), Stat(MinDamagePercent, 40),
+                Stat(MaxDamagePercent, 40), Stat(ResFire, 8)),
+                null));
+
+            // `amul` is a type with no item of that code, so nothing here resolves as an item code.
+            cases.Add(Case("crafted-caster-amulet", Crafted(
+                amulet, affix, Stat(RegenMana, 6), Stat(MaxMana, 15), Stat(FasterCast, 10),
+                Stat(ResFire, 8)),
+                null));
+
+            // Two families both fit, so the recipe stays unknown and its mods stay unattributed.
+            cases.Add(Case("crafted-ambiguous", Crafted(
+                crown, 0, Stat(LifeSteal, 3), Stat(MaxHp, 15), Stat(Deadly, 7),
+                Stat(RegenMana, 6), Stat(MaxMana, 15), Stat(ManaSteal, 3)),
+                null));
+
+            // A bow IS in a craft slot — itemtypes gives bow -> miss -> weap — so all four weapon
+            // recipes are candidates and none of them survives the stats: -1 by zero VIABLE
+            // candidates, which is a different arm from -1 by no candidates at all.
+            cases.Add(Case("crafted-no-viable-recipe", Crafted(
+                bow, 0, Stat(LifeSteal, 3), Stat(MaxHp, 15), Stat(Deadly, 7)),
+                null));
+
+            // A small charm is `scha` -> `char` -> `misc`, under none of the nine craft slots, so
+            // the slot lookup gives -1 before any candidate is gathered. This is the arm that would
+            // regress if the lookup started guessing a slot.
+            cases.Add(Case("crafted-no-recipe-slot", Crafted(
+                charm, 0, Stat(LifeSteal, 3), Stat(MaxHp, 15), Stat(Deadly, 7)),
+                null));
+
+            // The realistic shape on the family whose recipe writes four mods rather than three.
+            cases.Add(Case("crafted-with-affix", Crafted(
+                crown, affix, Stat(RedDmg, 3), Stat(RedMag, 2), Stat(ResLtng, 8),
+                Stat(AcPercent, 20), Stat(ResFire, 12)),
+                null));
+
+            AddCraftedSweep(cases, affix);
+        }
+
+        /// <summary>
+        /// One case per crafted recipe. The eight cases above single out the shapes worth naming;
+        /// this is what puts every ROW in front of the differential — six of the nine slots and 30
+        /// of the 36 rows were otherwise reached by nothing, so a slot derivation that broke for,
+        /// say, belts would have diverged silently.
+        ///
+        /// Each item carries exactly the stats its recipe writes plus one affix, since finding the
+        /// recipe among stats it does not explain is the deduction's actual job.
+        /// </summary>
+        private static void AddCraftedSweep(List<string> cases, int affix)
+        {
+            for (int row = 0; row < Data.CubeMain.RowCount; ++row)
+            {
+                if (!IsCraftedRecipe(row))
+                {
+                    continue;
+                }
+
+                int classId = Items.ClassIdForCode(CraftedBaseCode(row));
+                if (classId < 0)
+                {
+                    continue;
+                }
+
+                var stats = new List<string>(CraftedRecipeStats(row));
+                stats.Add(Stat(39, 8));
+
+                cases.Add(Case(
+                    "craftsweep-" + CraftedName(row).Replace(' ', '-'),
+                    Crafted(classId, affix, stats.ToArray()),
+                    null));
+            }
+        }
+
+        private static bool IsCraftedRecipe(int row)
+        {
+            foreach (string part in
+                Data.CubeMain.GetString(row, "output").Replace("\"", string.Empty).Split(','))
+            {
+                if (part.Trim() == "crf")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>The "safety helm" half of the shipped description, for the case name.</summary>
+        private static string CraftedName(int row)
+        {
+            string description = Data.CubeMain.GetString(row, "description");
+            return description.Substring(
+                description.LastIndexOf("-> ", StringComparison.Ordinal) + 3).Trim();
+        }
+
+        /// <summary>
+        /// A base the recipe's slot holds. Twelve rows name an item TYPE in `input 1` rather than an
+        /// item code, and `amul` / `ring` have no item of that code at all, so a member of the type
+        /// stands in for those.
+        /// </summary>
+        private static string CraftedBaseCode(int row)
+        {
+            string spec = Data.CubeMain.GetString(row, "input 1").Replace("\"", string.Empty);
+            int comma = spec.IndexOf(',');
+            string code = (comma < 0 ? spec : spec.Substring(0, comma)).Trim();
+
+            switch (code)
+            {
+                case "blun": return "clb";
+                case "axe": return "lax";
+                case "rod": return "wnd";
+                case "spea": return "spr";
+                case "amul": return "amu";
+                case "ring": return "rin";
+                default: return code;
+            }
+        }
+
+        /// <summary>
+        /// The stats one recipe writes, derived from the tables rather than restated: each mod
+        /// code's properties.txt `stat1` through itemstatcost.txt. Two codes need more, and both are
+        /// recognised by their FUNC and thrown on rather than assumed, so a drift that moved either
+        /// fails the generator instead of quietly emitting a case that proves nothing — `dmg%` is
+        /// func 7 with no `stat1` at all, and `gethit-skill` is func 11, whose stat sits on the
+        /// packed layer `(level &amp; 0x3F) + (skill &lt;&lt; 6)` (0x65f54f).
+        /// </summary>
+        private static List<string> CraftedRecipeStats(int row)
+        {
+            var stats = new List<string>();
+
+            for (int mod = 1; mod <= 5; ++mod)
+            {
+                string where = "cubemain row " + row + " mod " + mod;
+
+                string code = Data.CubeMain.GetString(row, "mod " + mod).Trim();
+                if (code.Length == 0)
+                {
+                    continue;
+                }
+
+                int property = Data.Properties.FindRow("code", code);
+                if (property < 0)
+                {
+                    throw new InvalidOperationException(where + ": no properties.txt row");
+                }
+
+                if (Data.Properties.GetString(property, "stat2").Trim().Length != 0)
+                {
+                    throw new InvalidOperationException(where + ": writes more than one stat");
+                }
+
+                int min = Data.CubeMain.GetInt(row, "mod " + mod + " min");
+                int max = Data.CubeMain.GetInt(row, "mod " + mod + " max");
+                int func = Data.Properties.GetInt(property, "func1");
+                string statName = Data.Properties.GetString(property, "stat1").Trim();
+
+                if (func == 7)
+                {
+                    stats.Add(Stat(18, Math.Min(min, max)));
+                    stats.Add(Stat(17, Math.Min(min, max)));
+                    continue;
+                }
+
+                int statId = Data.ItemStatCost.StatIdForName(statName);
+                if (statId < 0)
+                {
+                    throw new InvalidOperationException(where + ": no stat named " + statName);
+                }
+
+                // Func 11's two cells are a chance and a LEVEL, not a range: the chance is the
+                // value and the level rides in the layer alongside the skill. The chance is not
+                // shifted — ITEMPROP_AddSkillCharges bypasses ITEMMOD_AddStatToItem entirely.
+                if (func == 11)
+                {
+                    int skill = Data.CubeMain.GetInt(row, "mod " + mod + " param");
+                    stats.Add(Stat(statId, min, (max & 0x3F) + (skill << 6)));
+                    continue;
+                }
+
+                if (func != 1 && func != 2 && func != 8)
+                {
+                    throw new InvalidOperationException(where + ": unhandled func " + func);
+                }
+
+                // Recorded SHIFTED, the way the game stores it: ITEMMOD_AddStatToItem shifts by
+                // nValShift before writing (0x65ea50), so `hp` 10..20 reaches the record as
+                // 2560..5120. Emitting the unshifted cell put maxhp and maxmana in `outOfRange`,
+                // which is the reconstruction correctly saying the record could not have happened.
+                stats.Add(Stat(statId, Math.Min(min, max) << ValShift(statId)));
+            }
+
+            return stats;
+        }
+
+        private static int ValShift(int statId)
+        {
+            StatDescriptor descriptor;
+            return Data.ItemStatCost.TryGetStat(statId, out descriptor) ? descriptor.ValShift : 0;
+        }
+
+        private static string Stat(int id, int value, int layer = 0)
+        {
+            return "{ \"id\": " + id + ", \"value\": " + value
+                + (layer == 0 ? string.Empty : ", \"layer\": " + layer) + " }";
+        }
+
+        private static string Crafted(int classId, int affixId, params string[] stats)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 8, \"itemFlags\": 16"
+                + ", \"fileIndex\": 0, \"itemLevel\": 70"
+                + ", \"magicPrefix\": [ " + affixId + ", 0, 0 ]"
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 64, "
+                + "\"stats\": [ " + string.Join(", ", stats) + " ] } ] }";
+        }
+
+        /// <summary>
+        /// A host whose FILLER carries its own rolled affixes — a jewel. That filler contributes
+        /// nothing through gems.txt, so its roll reaches the host only through the jewel's own
+        /// affixes, and the merged line holds the SUM of both halves while each separated block
+        /// holds one. Six existing cases have a self-stat filler but none has a RANGED affix on it,
+        /// so the summing was covered by hand-written tests alone.
+        /// </summary>
+        private static void AddSelfStatFillerCases(List<string> cases)
+        {
+            List<int> ranged = RangedAffixes("res-fire");
+            if (ranged.Count < 3)
+            {
+                return;
+            }
+
+            int host = Items.ClassIdForCode("xhn");
+            int jewelId = Items.ClassIdForCode("jew");
+            int gem = Items.ClassIdForCode("gpr");
+
+            if (host < 0 || jewelId < 0 || gem < 0)
+            {
+                return;
+            }
+
+            // The same stat on the item AND on the jewel: the case where a summed span and an
+            // own-only span differ, so a view annotating the wrong one is visible.
+            cases.Add(Case(
+                "jewel-sharedstat",
+                SocketedHost(host, ranged[2], new[] { Jewel(jewelId, ranged[0]) }),
+                null));
+
+            // A jewel alongside a gem, so the two filler kinds are ranged by different routes in one
+            // render — gems.txt for the gem, its own affixes for the jewel.
+            cases.Add(Case(
+                "jewel-and-gem",
+                SocketedHost(host, ranged[2], new[] { Jewel(jewelId, ranged[0]), Gem(gem) }),
+                null));
+
+            // A jewel on a host with NO affix of its own, so the merged span is the jewel's alone.
+            cases.Add(Case(
+                "jewel-only",
+                SocketedHost(host, 0, new[] { Jewel(jewelId, ranged[1]) }),
+                null));
+        }
+
+        /// <summary>
+        /// 1-based affix ids carrying this mod code and passing <paramref name="accept"/>,
+        /// ascending, one entry per matching MOD — an affix carrying the code twice appears twice.
+        /// </summary>
+        private static List<int> ScanAffixes(string code, Func<TxtFile, int, int, bool> accept)
+        {
+            var found = new List<int>();
+
+            for (int id = 1; id <= Affixes.RowCount; ++id)
+            {
+                TxtFile table;
+                int row;
+                if (!Affixes.TryResolve(id, out table, out row))
+                {
+                    continue;
+                }
+
+                for (int mod = 1; mod <= 3; ++mod)
+                {
+                    if (table.GetString(row, "mod" + mod + "code").Trim() == code
+                        && (accept == null || accept(table, row, mod)))
+                    {
+                        found.Add(id);
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>1-based ids of affixes carrying this code with a genuine range, ascending.</summary>
+        private static List<int> RangedAffixes(string code)
+        {
+            return ScanAffixes(
+                code,
+                (table, row, mod) => table.GetInt(row, "mod" + mod + "min")
+                    != table.GetInt(row, "mod" + mod + "max"));
+        }
+
+        private static string Jewel(int classId, int affixId)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 4, \"itemFlags\": 16"
+                + ", \"fileIndex\": 0"
+                + ", \"magicPrefix\": [ " + affixId + ", 0, 0 ]"
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 64, "
+                + "\"stats\": [ { \"id\": 39, \"value\": 7 } ] } ] }";
+        }
+
+        private static string Gem(int classId)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 2, \"itemFlags\": 16, \"fileIndex\": 0 }";
+        }
+
+        private static string SocketedHost(int classId, int affixId, string[] fillers)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 6, \"itemFlags\": " + (16 | 0x800)
+                + ", \"fileIndex\": 0, \"itemLevel\": 70"
+                + ", \"magicPrefix\": [ " + affixId + ", 0, 0 ]"
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
+                + "\"stats\": [ { \"id\": 31, \"value\": 300 }, "
+                + "{ \"id\": 194, \"value\": " + fillers.Length + " } ] }"
+                + ", { \"stateNo\": 0, \"flags\": 64, "
+                + "\"stats\": [ { \"id\": 39, \"value\": 15 } ] } ]"
+                + ", \"items\": [" + string.Join(", ", fillers) + "] }";
+        }
+
+        /// <summary>
+        /// The first affix whose mod of this code has a NON-POSITIVE max — the arm that derives its
+        /// value from the item's level. An affix with a positive max skips that derivation, so a
+        /// case built on one cannot tell whether the level was used.
+        /// </summary>
+        private static int FirstAffixWithNonPositiveMax(string code)
+        {
+            List<int> found = ScanAffixes(
+                code, (table, row, mod) => table.GetInt(row, "mod" + mod + "max") <= 0);
+
+            return found.Count == 0 ? -1 : found[0];
+        }
+
+        /// <summary>The 1-based id of the first affix carrying this mod code, or -1.</summary>
+        private static int FirstAffixWithCode(string code)
+        {
+            List<int> found = ScanAffixes(code, null);
+
+            return found.Count == 0 ? -1 : found[0];
+        }
+
+        private static string UniqueRecord(int classId, int fileIndex, int itemLevel)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 7, \"itemFlags\": 16"
+                + ", \"fileIndex\": " + fileIndex
+                + ", \"itemLevel\": " + itemLevel
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
+                + "\"stats\": [ { \"id\": 31, \"value\": 120 } ] } ] }";
+        }
+
+        private static string AffixRecord(int classId, int affixId, int itemLevel)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 4, \"itemFlags\": 16"
+                + ", \"fileIndex\": 0"
+                + ", \"itemLevel\": " + itemLevel
+                + ", \"magicPrefix\": [ " + affixId + ", 0, 0 ]"
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
+                + "\"stats\": [ { \"id\": 21, \"value\": 8 }, { \"id\": 22, \"value\": 15 } ] } ] }";
+        }
+
         private static string Record(
             int classId, int quality, int flags, string baseStats, string modStats)
         {
@@ -691,15 +1248,103 @@ namespace D2ItemToolkit.Tools
                 + ", \"statsLists\": [" + string.Join(", ", lists) + "] }";
         }
 
-        private static string Player(int classId, int level)
+        private static string Player(int classId, int level, string carried = null)
         {
             return "{ \"unitType\": 0, \"classId\": " + classId
                 + ", \"flagsEx\": 33554432"
                 + ", \"skills\": [ { \"skill\": 117, \"level\": 10 } ]"
+                + (carried == null ? string.Empty : ", \"items\": [ " + carried + " ]")
                 + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, \"stats\": ["
                 + "{ \"id\": 12, \"value\": " + level + " }, "
                 + "{ \"id\": 0, \"value\": " + (20 + level) + " }, "
                 + "{ \"id\": 2, \"value\": " + (20 + level) + " } ] } ] }";
+        }
+
+        /// <summary>
+        /// A set piece as a WEARER carries it, at a given location. `location` 1 is the body and `x`
+        /// is then the equip slot, which is what separates a worn piece from one on the alternate
+        /// weapon set (11 and 12).
+        /// </summary>
+        private static string CarriedPiece(int setItemRow, string code, int location, int x)
+        {
+            int classId = Items.ClassIdForCode(code);
+            return "{ \"unitType\": 4, \"classId\": " + classId
+                + ", \"quality\": 5, \"itemFlags\": 16"
+                + ", \"fileIndex\": " + setItemRow
+                + ", \"location\": " + location + ", \"x\": " + x + " }";
+        }
+
+        /// <summary>
+        /// Set state DERIVED from the viewer rather than handed over as masks. The cases above pass
+        /// an explicit `set` object, which is the override path — these leave it out, so the
+        /// `annotated` and `socketsSplit` layers compare what Render itself derived.
+        ///
+        /// The discriminating one is the swap case: GetSetItem takes grid types 1, 3 and 4
+        /// (0x4867d4) so the piece is OWNED and green, while the worn mask takes type 3 alone
+        /// (0x62a3f0) so it lights no bit. An implementation that conflated the two would light one
+        /// bonus tier too many, and only this case would show it.
+        /// </summary>
+        private static void AddSetDerivationCases(List<string> cases)
+        {
+            const int Halo = 52, Wings = 53, Mantle = 51, Sickle = 50;
+            // Arctic HORN, slot 0 — not Arctic Binding, whose slot 2 collides with Angelic Halo's,
+            // so a dropped set-id filter would OR into a bit already set and render identically.
+            const int ArcticHorn = 54;
+
+            int ring = Items.ClassIdForCode("rin");
+            if (ring < 0)
+            {
+                return;
+            }
+
+            string hovered = "{ \"unitType\": 4, \"classId\": " + ring
+                + ", \"quality\": 5, \"itemFlags\": 16, \"fileIndex\": " + Halo
+                + ", \"location\": 1, \"x\": 6 }";
+
+            string self = CarriedPiece(Halo, "rin", 1, 6);
+
+            // Worn siblings only: two pieces, so the first partial tier lights.
+            cases.Add(Case("setderive-two-worn", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3))));
+
+            // A third piece in the INVENTORY: owned and green, but no extra tier.
+            cases.Add(Case("setderive-inventory-sibling", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(Wings, "amu", 3, 0))));
+
+            // The same third piece on the ALTERNATE WEAPON SET. Owned, green, and still no tier —
+            // the one case that separates the owned predicate from the worn one.
+            cases.Add(Case("setderive-weapon-swap", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(Sickle, "sbr", 1, 11))));
+
+            // ... and in the ACTIVE weapon slot, which DOES light a tier. The pair differs by one
+            // integer, so a divergence here is unambiguous.
+            cases.Add(Case("setderive-weapon-active", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(Sickle, "sbr", 1, 4))));
+
+            // The whole set worn, which is what reaches the full-set block — dead on this path
+            // until the derivation landed.
+            cases.Add(Case("setderive-full-set", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(Wings, "amu", 1, 5)
+                    + ", " + CarriedPiece(Sickle, "sbr", 1, 4))));
+
+            // A piece of ANOTHER set contributes nothing, so this must render as the two-worn case.
+            cases.Add(Case("setderive-foreign-piece", hovered,
+                Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(ArcticHorn, "swb", 1, 4))));
+
+            // Hovered from the INVENTORY while the set is worn: isEquipped is false, so the
+            // full-set block is suppressed even though the tiers are earned.
+            string loose = "{ \"unitType\": 4, \"classId\": " + ring
+                + ", \"quality\": 5, \"itemFlags\": 16, \"fileIndex\": " + Halo
+                + ", \"location\": 3, \"x\": 0 }";
+
+            cases.Add(Case("setderive-hovered-loose", loose,
+                Player(1, 40, CarriedPiece(Mantle, "rng", 1, 3)
+                    + ", " + CarriedPiece(Wings, "amu", 1, 5))));
         }
 
         private static string Case(

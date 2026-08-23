@@ -17,7 +17,7 @@ namespace D2ItemToolkit.Tests
               { ""stateNo"": 0, ""flags"": 2147483648,
                 ""stats"": [ { ""id"": 31, ""value"": 100 } ] }
             ],
-            ""sockets"": [
+            ""items"": [
               { ""classId"": 620, ""quality"": 2,
                 ""statsLists"": [ { ""source"": ""quality"", ""stateNo"": 0, ""flags"": 64,
                     ""stats"": [ { ""id"": 39, ""value"": 10 } ] } ] },
@@ -46,7 +46,7 @@ namespace D2ItemToolkit.Tests
         public void A_socket_entry_is_a_record_of_the_same_shape()
         {
             // The same reader works on a socket as on the root, which is the point of the fold.
-            IUnit filler = ItemStatReader.EnumerateSockets(Root).First();
+            IUnit filler = Root.Items.First();
 
             ItemIdentity identity = ItemRecordReader.ReadIdentity(filler);
             Assert.NotNull(identity);
@@ -83,7 +83,7 @@ namespace D2ItemToolkit.Tests
         {
             // Position in `sockets` IS the socket index, so a per-socket view is unnecessary:
             // take the entry and run the reader on it.
-            IUnit filler = ItemStatReader.EnumerateSockets(Root).ElementAt(socket);
+            IUnit filler = Root.Items.ElementAt(socket);
 
             SortedDictionary<int, int> view =
                 ItemStatReader.ReconstructView(filler, ItemStatView.ItemOnly());
@@ -109,7 +109,7 @@ namespace D2ItemToolkit.Tests
             Unit bare = Unit.FromJson(
                 @"{ ""classId"": 1, ""statsLists"": [] }");
 
-            Assert.Empty(ItemStatReader.EnumerateSockets(bare));
+            Assert.Empty(bare.Items);
             Assert.Empty(ItemStatReader.ReadSockets(bare));
         }
     }
