@@ -37,14 +37,18 @@ namespace D2ItemToolkit
     /// <summary>One stat's reconstructed span, as the item's own sources could have rolled it.</summary>
     public sealed class RolledStatRange
     {
-        internal RolledStatRange(int statId, int layer, int low, int high, RollSources sources)
+        internal RolledStatRange(
+            int statId, int layer, int low, int high, RollSources sources, int valShift)
         {
             StatId = statId;
             Layer = layer;
             Low = low;
             High = high;
             Sources = sources;
+            _valShift = valShift;
         }
+
+        private readonly int _valShift;
 
         public int StatId { get; private set; }
 
@@ -104,7 +108,22 @@ namespace D2ItemToolkit
 
         private int Display(int packed)
         {
-            return StatId == StatChargedSkill ? packed & 0xFF : packed;
+            if (StatId == StatChargedSkill)
+            {
+                return packed & 0xFF;
+            }
+
+            // A packed triple is not a magnitude, so shifting it would corrupt it rather than
+            // scale it.
+            if (IsPackedEncoding)
+            {
+                return packed;
+            }
+
+            // itemstatcost ValShift. Life, mana and stamina are stored 8.8 fixed point and every
+            // WRITER shifts them down before printing, so a span that skipped it read 256x too
+            // large: "+11 to Life [2816-3840]".
+            return packed >> _valShift;
         }
 
         private const int StatChargedSkill = 204;
@@ -318,6 +337,13 @@ namespace D2ItemToolkit
 
             var lowStats = new Dictionary<int, int>();
             var highStats = new Dictionary<int, int>();
+
+            // The BASE view at each end, kept apart from the merged one because op 13 consumes the
+            // two separately (STATLIST_LookupBaseStatWithMinAccr 0x624ed0 reads `Stats`, the result
+            // lands in FullStats at 0x625158). Only Defense rolls a base, so only Defense is in
+            // here.
+            var lowBase = new Dictionary<int, int>();
+            var highBase = new Dictionary<int, int>();
             var sourceOf = new Dictionary<int, RollSources>();
             var layerVaries = new List<RolledLayerRange>();
 
@@ -347,11 +373,18 @@ namespace D2ItemToolkit
             // "+30 Defense [33-35]" where 33-35 was the cap's 3..5 plus the rune's fixed 30.
             if (includeOwnSources)
             {
-                AddBaseDefense(item, lowStats, highStats, sourceOf);
+                AddBaseDefense(item, lowStats, highStats, lowBase, highBase, sourceOf);
             }
 
+            // The Defense line draws the OP-RESOLVED value, so its span has to be resolved too. A
+            // Large Shield rolling 12..14 under +150% Enhanced Defense prints 32 — a number that
+            // can never fall inside the 12..14 the base rolled within, which is what the span used
+            // to offer.
+            ResolveBaseOps(lowStats, lowBase);
+            ResolveBaseOps(highStats, highBase);
+
             var stats = new List<RolledStatRange>();
-            CollectRanges(lowStats, highStats, sourceOf, stats);
+            CollectRanges(lowStats, highStats, sourceOf, stats, _data.ItemStatCost);
 
             stats.Sort(CompareRanges);
             layerVaries.Sort(CompareLayerRanges);
@@ -668,7 +701,8 @@ namespace D2ItemToolkit
             Dictionary<int, int> lowStats,
             Dictionary<int, int> highStats,
             Dictionary<int, RollSources> sourceOf,
-            List<RolledStatRange> stats)
+            List<RolledStatRange> stats,
+            IItemStatCostTable statCost)
         {
             var keys = new SortedSet<int>(lowStats.Keys);
             foreach (int key in highStats.Keys)
@@ -692,12 +726,20 @@ namespace D2ItemToolkit
 
                 // Normalised, because a negative property rolls its "high" end lowest — `dmg-ac`
                 // runs -25..-40, so the arithmetic low is the second number.
+                int statId = ItemStatReader.StatFromKey(key);
+
+                StatDescriptor descriptor;
+                int valShift = statCost != null && statCost.TryGetStat(statId, out descriptor)
+                    ? descriptor.ValShift
+                    : 0;
+
                 stats.Add(new RolledStatRange(
-                    ItemStatReader.StatFromKey(key),
+                    statId,
                     ItemStatReader.LayerFromKey(key),
                     lowValue < highValue ? lowValue : highValue,
                     lowValue < highValue ? highValue : lowValue,
-                    sources));
+                    sources,
+                    valShift));
             }
         }
 
@@ -799,6 +841,8 @@ namespace D2ItemToolkit
             ItemIdentity item,
             Dictionary<int, int> lowStats,
             Dictionary<int, int> highStats,
+            Dictionary<int, int> lowBase,
+            Dictionary<int, int> highBase,
             Dictionary<int, RollSources> sourceOf)
         {
             int minac = _items.GetInt(item.ClassId, "minac");
@@ -825,11 +869,44 @@ namespace D2ItemToolkit
             int key = ItemStatReader.PackStatKey(0, StatDefense);
             Accumulate(lowStats, key, minac);
             Accumulate(highStats, key, maxac);
+            lowBase[key] = minac;
+            highBase[key] = maxac;
 
             RollSources existing;
             sourceOf[key] = sourceOf.TryGetValue(key, out existing)
                 ? existing | RollSources.Base
                 : RollSources.Base;
+        }
+
+        /// <summary>
+        /// Applies op 13 to one end of the reconstruction, writing back only the TARGET stats.
+        ///
+        /// The percent stats themselves are deliberately left in place. On the item they are
+        /// dropped from FullStats (0x626821), but the reconstruction feeds two different lines: the
+        /// Defense line, which draws the resolved target, and `+150% Enhanced Defense`, which is
+        /// drawn from the modifier view where the percent survives. Transplanting only the targets
+        /// gives each line a span in its own units.
+        /// </summary>
+        private void ResolveBaseOps(Dictionary<int, int> stats, Dictionary<int, int> baseStats)
+        {
+            if (baseStats.Count == 0)
+            {
+                return;
+            }
+
+            var merged = new Dictionary<int, int>(stats);
+            ItemStatOps.Resolve(merged, baseStats, _data.ItemStatCost);
+
+            foreach (ItemStatOpEntry entry in _data.ItemStatCost.PercentOfBaseEntries)
+            {
+                int key = ItemStatReader.PackStatKey(0, entry.TargetStat);
+
+                int resolved;
+                if (merged.TryGetValue(key, out resolved))
+                {
+                    stats[key] = resolved;
+                }
+            }
         }
 
         private static void Accumulate(Dictionary<int, int> into, int key, int value)

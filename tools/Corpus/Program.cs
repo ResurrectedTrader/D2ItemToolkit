@@ -798,6 +798,72 @@ namespace D2ItemToolkit.Tools
                         null));
                 }
             }
+
+            // The three ValShift 8 stats — life, mana and stamina are stored 8.8 fixed point, and
+            // every WRITER shifts them down before printing. Nothing else in the corpus carries a
+            // shifted stat, so a span reported in storage units rather than display units — "+11 to
+            // Life [2816-3840]" — was invisible to the differential.
+            //
+            // The stat VALUE is carried too, not just the affix: the reconstruction alone covers
+            // the span, but only a record that draws the line puts the annotation in front of it.
+            foreach (ShiftedStat shifted in new[]
+                     {
+                         new ShiftedStat("hp", 7),
+                         new ShiftedStat("mana", 9),
+                         new ShiftedStat("stam", 11),
+                     })
+            {
+                List<int> ranged = RangedAffixes(shifted.Code);
+                if (ranged.Count == 0 || crs < 0)
+                {
+                    continue;
+                }
+
+                cases.Add(Case(
+                    "affix-" + shifted.Code,
+                    AffixRecord(
+                        crs,
+                        ranged[0],
+                        55,
+                        "{ \"id\": " + shifted.StatId + ", \"value\": "
+                        + (MidRollOf(ranged[0], shifted.Code) << 8) + " }"),
+                    null));
+            }
+        }
+
+        /// <summary>One itemstatcost row with a non-zero ValShift, and the affix code reaching it.</summary>
+        private struct ShiftedStat
+        {
+            public readonly string Code;
+            public readonly int StatId;
+
+            public ShiftedStat(string code, int statId)
+            {
+                Code = code;
+                StatId = statId;
+            }
+        }
+
+        /// <summary>The midpoint of the roll <paramref name="affix"/> gives <paramref name="code"/>.</summary>
+        private static int MidRollOf(int affix, string code)
+        {
+            TxtFile table;
+            int row;
+            if (!Affixes.TryResolve(affix, out table, out row))
+            {
+                return 0;
+            }
+
+            for (int mod = 1; mod <= 3; ++mod)
+            {
+                if (table.GetString(row, "mod" + mod + "code").Trim() == code)
+                {
+                    return (table.GetInt(row, "mod" + mod + "min")
+                            + table.GetInt(row, "mod" + mod + "max")) / 2;
+                }
+            }
+
+            return 0;
         }
 
         /// <summary>
@@ -1216,15 +1282,21 @@ namespace D2ItemToolkit.Tools
                 + "\"stats\": [ { \"id\": 31, \"value\": 120 } ] } ] }";
         }
 
-        private static string AffixRecord(int classId, int affixId, int itemLevel)
+        private static string AffixRecord(
+            int classId, int affixId, int itemLevel, string modStats = "")
         {
+            string mods = modStats.Length == 0
+                ? string.Empty
+                : ", { \"stateNo\": 0, \"flags\": 64, \"stats\": [ " + modStats + " ] }";
+
             return "{ \"unitType\": 4, \"classId\": " + classId
                 + ", \"quality\": 4, \"itemFlags\": 16"
                 + ", \"fileIndex\": 0"
                 + ", \"itemLevel\": " + itemLevel
                 + ", \"magicPrefix\": [ " + affixId + ", 0, 0 ]"
                 + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
-                + "\"stats\": [ { \"id\": 21, \"value\": 8 }, { \"id\": 22, \"value\": 15 } ] } ] }";
+                + "\"stats\": [ { \"id\": 21, \"value\": 8 }, { \"id\": 22, \"value\": 15 } ] }"
+                + mods + " ] }";
         }
 
         private static string Record(

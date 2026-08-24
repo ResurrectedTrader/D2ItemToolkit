@@ -164,6 +164,23 @@ namespace D2ItemToolkit
         /// <summary>The stat's layer — the skill, class or tab. 0 for a plain stat.</summary>
         public int Layer;
 
+        /// <summary>
+        /// Every stat this line displays a number for, in the order the numbers appear. Null means
+        /// just <see cref="StatId"/>.
+        ///
+        /// "Adds 1-4 Cold Damage" is coldmindam and coldmaxdam on one line, and "+2 to All
+        /// Attributes" is a DescGrp standing for four. A caller matching lines back to
+        /// <see cref="ItemRollRanges.Stats"/> needs all of them, not the first.
+        /// </summary>
+        public int[] ShownStats;
+
+        /// <summary>
+        /// True when the line speaks for more than the one stat in <see cref="StatId"/> — the same
+        /// condition <see cref="ShownStats"/> is populated under, exposed as a flag because a
+        /// caller usually only wants to know whether one stat is the whole story.
+        /// </summary>
+        public bool Aggregated;
+
         public bool EmitsColorMarker;
 
         /// <summary>
@@ -1244,6 +1261,8 @@ namespace D2ItemToolkit
                     line.Color = running;
                     line.StatId = modifier.StatId;
                     line.Layer = modifier.Layer;
+                    line.ShownStats = modifier.ShownStats;
+                    line.Aggregated = modifier.Aggregated;
 
                     line.EmitsColorMarker = firstOfSection;
                     firstOfSection = false;

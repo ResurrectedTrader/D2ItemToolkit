@@ -111,13 +111,13 @@ larger corpus.
 
 ```bash
 # C#
-dotnet test                                  # 1034 tests
+dotnet test                                  # 1041 tests
 dotnet run --project tools/RecordSmoke
 dotnet run --project tools/DataSmoke         # optional: -- <excelDir> <localeDir>
 
 # TypeScript (npm workspaces, rooted at the repository)
 npm ci                                       # also generates the embedded data blob
-npm test                                     # 1051 tests, including the differential
+npm test                                     # 1057 tests, including the differential
 npm run test:adversarial                     # 11,972 producer-legal hostile cases, opt-in
 npm run typecheck
 npm run lint                                 # ESLint, type-aware; --max-warnings 0

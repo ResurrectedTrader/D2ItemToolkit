@@ -1,5 +1,6 @@
 import { ItemRecordFlags, type ItemIdentity } from './ItemRecord.js';
 import { ItemStatReader } from './ItemStatReader.js';
+import { ItemStatOps } from './ItemStatOps.js';
 import { Int32 } from '../Types.js';
 import { PropertyApplier, RollEnd, type ItemProperty } from './PropertyApplier.js';
 import type { ItemTable } from '../Tables/ItemTable.js';
@@ -8,7 +9,7 @@ import type { MagicAffixTable } from '../Tables/MagicAffixTable.js';
 import type { PropertiesTable } from '../Tables/PropertiesTable.js';
 import type { SetTable } from '../Tables/SetTable.js';
 import type { TxtFile } from '../Data/TxtFile.js';
-import type { D2DataFiles } from '../Tables/TxtDataProviders.js';
+import type { D2DataFiles, TxtItemStatCostTable } from '../Tables/TxtDataProviders.js';
 
 /**
  * Where a reconstructed range came from. Flags, because two sources can land on one stat — a
@@ -101,8 +102,20 @@ function packedEncoding(statId: number): boolean {
   return statId === StatChargedSkill || (statId >= FirstByTime && statId <= LastByTime);
 }
 
-function displayValue(statId: number, packed: number): number {
-  return statId === StatChargedSkill ? packed & 0xff : packed;
+function displayValue(statId: number, packed: number, valShift: number): number {
+  if (statId === StatChargedSkill) {
+    return packed & 0xff;
+  }
+
+  // A packed triple is not a magnitude, so shifting it would corrupt it rather than scale it.
+  if (packedEncoding(statId)) {
+    return packed;
+  }
+
+  // itemstatcost ValShift. Life, mana and stamina are stored 8.8 fixed point and every WRITER
+  // shifts them down before printing, so a span that skipped it read 256x too large:
+  // "+11 to Life [2816-3840]".
+  return packed >> valShift;
 }
 
 /**
@@ -277,6 +290,13 @@ export class RolledRangeReconstructor {
 
     const lowStats = new Map<number, number>();
     const highStats = new Map<number, number>();
+
+    // The BASE view at each end, kept apart from the merged one because op 13 consumes the two
+    // separately (STATLIST_LookupBaseStatWithMinAccr 0x624ed0 reads `Stats`, the result lands in
+    // FullStats at 0x625158). Only Defense rolls a base, so only Defense is in here.
+    const lowBase = new Map<number, number>();
+    const highBase = new Map<number, number>();
+
     const sourceOf = new Map<number, RollSources>();
     const layerVaries: RolledLayerRange[] = [];
 
@@ -302,10 +322,21 @@ export class RolledRangeReconstructor {
     // reconstruction that added it gave a gem block the HOST's base span — "+30 Defense [33-35]"
     // where 33-35 was the cap's 3..5 plus the rune's fixed 30.
     if (includeOwnSources) {
-      this.addBaseDefense(item, lowStats, highStats, sourceOf);
+      this.addBaseDefense(item, lowStats, highStats, lowBase, highBase, sourceOf);
     }
 
-    const stats = RolledRangeReconstructor.collectRanges(lowStats, highStats, sourceOf);
+    // The Defense line draws the OP-RESOLVED value, so its span has to be resolved too. A Large
+    // Shield rolling 12..14 under +150% Enhanced Defense prints 32 — a number that can never fall
+    // inside the 12..14 the base rolled within, which is what the span used to offer.
+    this.resolveBaseOps(lowStats, lowBase);
+    this.resolveBaseOps(highStats, highBase);
+
+    const stats = RolledRangeReconstructor.collectRanges(
+      lowStats,
+      highStats,
+      sourceOf,
+      this.data.itemStatCost,
+    );
 
     stats.sort((a, b) => a.statId - b.statId || a.layer - b.layer);
     layerVaries.sort((a, b) => a.statId - b.statId || a.layerLow - b.layerLow);
@@ -577,6 +608,7 @@ export class RolledRangeReconstructor {
     lowStats: Map<number, number>,
     highStats: Map<number, number>,
     sourceOf: Map<number, RollSources>,
+    statCost: TxtItemStatCostTable,
   ): RolledStatRange[] {
     const keys = new Set<number>([...lowStats.keys(), ...highStats.keys()]);
     const stats: RolledStatRange[] = [];
@@ -590,16 +622,19 @@ export class RolledRangeReconstructor {
       const min = Math.min(lowValue, highValue);
       const max = Math.max(lowValue, highValue);
 
+      const statId = ItemStatReader.statFromKey(key);
+      const valShift = statCost.tryGetStat(statId)?.valShift ?? 0;
+
       stats.push({
-        statId: ItemStatReader.statFromKey(key),
+        statId,
         layer: ItemStatReader.layerFromKey(key),
         low: min,
         high: max,
         sources: sourceOf.get(key) ?? RollSources.None,
         isRange: min !== max,
-        isPackedEncoding: packedEncoding(ItemStatReader.statFromKey(key)),
-        displayLow: displayValue(ItemStatReader.statFromKey(key), min),
-        displayHigh: displayValue(ItemStatReader.statFromKey(key), max),
+        isPackedEncoding: packedEncoding(statId),
+        displayLow: displayValue(statId, min, valShift),
+        displayHigh: displayValue(statId, max, valShift),
       });
     }
 
@@ -676,6 +711,8 @@ export class RolledRangeReconstructor {
     item: ItemIdentity,
     lowStats: Map<number, number>,
     highStats: Map<number, number>,
+    lowBase: Map<number, number>,
+    highBase: Map<number, number>,
     sourceOf: Map<number, RollSources>,
   ): void {
     let minac = this.items.getInt(item.classId, 'minac');
@@ -699,7 +736,36 @@ export class RolledRangeReconstructor {
     const key = ItemStatReader.packStatKey(0, StatDefense);
     lowStats.set(key, (lowStats.get(key) ?? 0) + minac);
     highStats.set(key, (highStats.get(key) ?? 0) + maxac);
+    lowBase.set(key, minac);
+    highBase.set(key, maxac);
     sourceOf.set(key, (sourceOf.get(key) ?? RollSources.None) | RollSources.Base);
+  }
+
+  /**
+   * Applies op 13 to one end of the reconstruction, writing back only the TARGET stats.
+   *
+   * The percent stats themselves are deliberately left in place. On the item they are dropped from
+   * FullStats (0x626821), but the reconstruction feeds two different lines: the Defense line, which
+   * draws the resolved target, and `+150% Enhanced Defense`, which is drawn from the modifier view
+   * where the percent survives. Transplanting only the targets gives each line a span in its own
+   * units.
+   */
+  private resolveBaseOps(stats: Map<number, number>, baseStats: Map<number, number>): void {
+    if (baseStats.size === 0) {
+      return;
+    }
+
+    const merged = new Map<number, number>(stats);
+    ItemStatOps.resolve(merged, baseStats, this.data.itemStatCost);
+
+    for (const entry of this.data.itemStatCost.percentOfBaseEntries) {
+      const key = ItemStatReader.packStatKey(0, entry.targetStat);
+
+      const resolved = merged.get(key);
+      if (resolved !== undefined) {
+        stats.set(key, resolved);
+      }
+    }
   }
 
   /**

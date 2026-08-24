@@ -123,16 +123,14 @@ namespace D2ItemToolkit
             // Separating the fillers means the item's own block must not contain them, which is
             // exactly what IncludeSockets false already does — they are moved, not dropped.
             bool includeSockets = opts.IncludeSockets && !opts.SeparateSocketContributions;
-            Composed composed = Compose(item, viewer, opts, includeSockets);
 
-            if (composed.Kind == ItemTooltipKind.IdentifiedSetItem)
-            {
-                // Derived from the viewer rather than defaulted to "none". The old default painted
-                // every piece red and selected no tier, and — because the full-set block is gated
-                // on IsEquipped — silently suppressed it for anyone actually wearing the set.
-                // A viewer that carries nothing still yields exactly that empty input.
-                return RenderSetItem(item, SetStateOf(item, viewer), viewer, opts);
-            }
+            // Derived from the viewer rather than defaulted to "none". The old default painted
+            // every piece red and selected no tier, and — because the full-set block is gated on
+            // IsEquipped — silently suppressed it for anyone actually wearing the set. A viewer
+            // that carries nothing still yields exactly that empty input, and a non-set item exits
+            // SetStateOf after the Location test, so this costs nothing on the common path.
+            SetItemTooltipInput set = SetStateOf(item, viewer);
+            Composed composed = Compose(item, viewer, opts, includeSockets, set.IsEquipped);
 
             // Installed BEFORE composing, because the annotation is written into each line's text
             // as it is built rather than patched onto the finished list.
@@ -143,10 +141,21 @@ namespace D2ItemToolkit
                 composed.Composer.RangeColor = opts.RangeColor;
             }
 
-            IReadOnlyList<ItemTooltipLine> lines =
-                composed.Kind == ItemTooltipKind.Book
-                    ? composed.Composer.ComposeBook(composed.Context)
-                    : composed.Composer.Compose(composed.Context, composed.ModifierStats);
+            IReadOnlyList<ItemTooltipLine> lines;
+            switch (composed.Kind)
+            {
+                case ItemTooltipKind.IdentifiedSetItem:
+                    lines = SetItemLines(item, viewer, composed, set);
+                    break;
+
+                case ItemTooltipKind.Book:
+                    lines = composed.Composer.ComposeBook(composed.Context);
+                    break;
+
+                default:
+                    lines = composed.Composer.Compose(composed.Context, composed.ModifierStats);
+                    break;
+            }
 
             if (opts.SeparateSocketContributions)
             {
@@ -627,7 +636,8 @@ namespace D2ItemToolkit
             if (set == null) throw new ArgumentNullException("set");
 
             TooltipOptions opts = options ?? TooltipOptions.Default;
-            Composed composed = Compose(item, viewer, opts, opts.IncludeSockets, set.IsEquipped);
+            bool includeSockets = opts.IncludeSockets && !opts.SeparateSocketContributions;
+            Composed composed = Compose(item, viewer, opts, includeSockets, set.IsEquipped);
 
             if (composed.Kind != ItemTooltipKind.IdentifiedSetItem)
             {
@@ -636,6 +646,36 @@ namespace D2ItemToolkit
                     ", not the set-item tooltip path. Call Render instead.");
             }
 
+            if (opts.ShowRolledRanges)
+            {
+                composed.Composer.RangeAnnotation =
+                    BuildRangeAnnotation(item, opts, includeSockets);
+                composed.Composer.RangeColor = opts.RangeColor;
+            }
+
+            IReadOnlyList<ItemTooltipLine> lines =
+                SetItemLines(item, viewer, composed, set);
+
+            if (opts.SeparateSocketContributions)
+            {
+                lines = WithSocketBlocks(item, viewer, opts, lines);
+            }
+
+            return new Tooltip(composed.Kind, lines, composed.Composer, opts);
+        }
+
+        /// <summary>
+        /// The set-item body, shared by <see cref="Render"/> and <see cref="RenderSetItem"/> so
+        /// that both reach it with the option handling already applied. Routing the set path
+        /// through its own entry point is what previously made ShowRolledRanges and
+        /// SeparateSocketContributions no-ops on all 127 pieces.
+        /// </summary>
+        private IReadOnlyList<ItemTooltipLine> SetItemLines(
+            IUnit item,
+            IUnit viewer,
+            Composed composed,
+            SetItemTooltipInput set)
+        {
             var builder = new SetItemTooltipBuilder(_data, _sets, _items, _types);
 
             SetItemTooltipContent content = builder.Build(
@@ -643,12 +683,10 @@ namespace D2ItemToolkit
 
             // GetSetItemsLine returning null returns at 0x48d397 and GetSetsLine at 0x48d3ab, in
             // both cases before a single buffer is appended — the game draws no tooltip at all.
-            IReadOnlyList<ItemTooltipLine> lines = content == null
+            return content == null
                 ? new ItemTooltipLine[0]
                 : composed.Composer.ComposeSetItem(
                     composed.Context, content, composed.ModifierStats);
-
-            return new Tooltip(composed.Kind, lines, composed.Composer, opts);
         }
 
         /// <summary>

@@ -52,7 +52,6 @@ export {
 
 // The DTO for an identified set item. Only what the item document cannot say: which siblings the
 // viewer holds, the two worn masks, whether the piece is equipped, and the full-set stat block.
-export type { SetItemTooltipInput } from './Tooltip/SetItemTooltip.js';
 
 // The game tables, for lookups this library does not do for you. Reachable from an engine as
 // `engine.data` / `engine.items` / `engine.types`, or built directly from `D2DataFiles.load()`.

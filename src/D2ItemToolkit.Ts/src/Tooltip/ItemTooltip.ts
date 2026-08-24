@@ -159,6 +159,23 @@ export class ItemTooltipLine {
   /** The stat's layer — the skill, class or tab. 0 for a plain stat. */
   layer = 0;
 
+  /**
+   * Every stat this line displays a number for, in the order the numbers appear. Null means just
+   * `statId`.
+   *
+   * "Adds 1-4 Cold Damage" is coldmindam and coldmaxdam on one line, and "+2 to All Attributes" is a
+   * DescGrp standing for four. A caller matching lines back to `ItemRollRanges.stats` needs all of
+   * them, not the first.
+   */
+  shownStats: number[] | null = null;
+
+  /**
+   * True when the line speaks for more than the one stat in `statId` — the same condition
+   * `shownStats` is populated under, exposed as a flag because a caller usually only wants to know
+   * whether one stat is the whole story.
+   */
+  aggregated = false;
+
   emitsColorMarker = false;
 
   /**
@@ -1195,6 +1212,8 @@ export class ItemTooltipComposer {
         line.color = running;
         line.statId = modifier.statId;
         line.layer = modifier.layer;
+        line.shownStats = modifier.shownStats;
+        line.aggregated = modifier.aggregated;
 
         line.emitsColorMarker = firstOfSection;
         firstOfSection = false;

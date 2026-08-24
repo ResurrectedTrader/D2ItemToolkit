@@ -44,7 +44,15 @@ export interface RenderedRecord {
     partialText: string;
   } | null;
   sections?: Record<string, string>;
-  lines?: { section: string; color: number; statId: number; layer: number; text: string }[];
+  lines?: {
+    section: string;
+    color: number;
+    statId: number;
+    layer: number;
+    shownStats: number[] | null;
+    aggregated: boolean;
+    text: string;
+  }[];
   rendered?: string;
   colored?: string;
   ranges?: PackedRanges;
@@ -56,7 +64,15 @@ export interface RenderedRecord {
 
 /** The `ranges` object, shaped to match `PackRanges` in tools/Reference/Program.cs exactly. */
 interface PackedRanges {
-  stats: { stat: number; layer: number; low: number; high: number; sources: number }[];
+  stats: {
+    stat: number;
+    layer: number;
+    low: number;
+    high: number;
+    displayLow: number;
+    displayHigh: number;
+    sources: number;
+  }[];
   layerVaries: {
     stat: number;
     layerLow: number;
@@ -153,6 +169,8 @@ function packRanges(source: ItemRollRanges): PackedRanges {
       layer: r.layer,
       low: r.low,
       high: r.high,
+      displayLow: r.displayLow,
+      displayHigh: r.displayHigh,
       sources: r.sources,
     })),
     layerVaries: source.layerVaries.map(r => ({
@@ -212,7 +230,15 @@ function packSections(sections: RecordSections): Record<string, string> {
   return packed;
 }
 
-type PackedLine = { section: string; color: number; statId: number; layer: number; text: string };
+type PackedLine = {
+  section: string;
+  color: number;
+  statId: number;
+  layer: number;
+  shownStats: number[] | null;
+  aggregated: boolean;
+  text: string;
+};
 
 // statId and layer are public members a caller reads, and they were NOT compared: one
 // implementation decoded the damage line's layer a second time and reported 0 for every line,
@@ -225,6 +251,8 @@ function packLines(lines: readonly ItemTooltipLine[]): PackedLine[] {
       color: line.color,
       statId: line.statId,
       layer: line.layer,
+      shownStats: line.shownStats,
+      aggregated: line.aggregated,
       text: line.text as string,
     });
   }

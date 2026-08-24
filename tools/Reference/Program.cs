@@ -407,6 +407,8 @@ namespace D2ItemToolkit.Tools
                     + ", \"layer\": " + range.Layer
                     + ", \"low\": " + range.Low
                     + ", \"high\": " + range.High
+                    + ", \"displayLow\": " + range.DisplayLow
+                    + ", \"displayHigh\": " + range.DisplayHigh
                     + ", \"sources\": " + (int)range.Sources + "}");
             }
 
@@ -482,8 +484,14 @@ namespace D2ItemToolkit.Tools
                 // StatId and Layer are public members a caller reads, and they were NOT compared:
                 // one implementation decoded the damage line's layer a second time and reported 0
                 // for every line, which nothing here could see.
+                string shown = line.ShownStats == null
+                    ? "null"
+                    : "[" + string.Join(", ", line.ShownStats) + "]";
+
                 parts.Add("{\"section\": \"" + line.Section + "\", \"color\": " + line.Color
                     + ", \"statId\": " + line.StatId + ", \"layer\": " + line.Layer
+                    + ", \"shownStats\": " + shown
+                    + ", \"aggregated\": " + (line.Aggregated ? "true" : "false")
                     + ", \"text\": " + Quote(line.Text) + "}");
             }
 

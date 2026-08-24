@@ -448,15 +448,14 @@ export class TooltipEngine {
     const includeSockets =
       (options.includeSockets ?? true) && !(options.separateSocketContributions ?? false);
 
-    const composed = this.compose(item, viewer, options, includeSockets);
+    // Derived from the viewer rather than defaulted to "none". The old default painted every piece
+    // red and selected no tier, and — because the full-set block is gated on isEquipped — silently
+    // suppressed it for anyone actually wearing the set. A viewer that carries nothing still yields
+    // exactly that empty input, and a non-set item exits setStateOf after the location test, so
+    // this costs nothing on the common path.
+    const set = this.setStateOf(item, viewer);
 
-    if (composed.kind === ItemTooltipKind.IdentifiedSetItem) {
-      // Derived from the viewer rather than defaulted to "none". The old default painted every
-      // piece red and selected no tier, and — because the full-set block is gated on isEquipped —
-      // silently suppressed it for anyone actually wearing the set. A viewer that carries nothing
-      // still yields exactly that empty input.
-      return this.renderSetItem(item, this.setStateOf(item, viewer), viewer, options);
-    }
+    const composed = this.compose(item, viewer, options, includeSockets, set.isEquipped ?? false);
 
     // Installed BEFORE composing, because the annotation is written into each line's text as it is
     // built rather than patched onto the finished list.
@@ -465,16 +464,41 @@ export class TooltipEngine {
       composed.composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
     }
 
-    let lines =
-      composed.kind === ItemTooltipKind.Book
-        ? composed.composer.composeBook(composed.context)
-        : composed.composer.compose(composed.context, composed.modifierStats);
+    let lines: readonly ItemTooltipLine[];
+    switch (composed.kind) {
+      case ItemTooltipKind.IdentifiedSetItem:
+        lines = this.setItemLines(item, viewer, composed, set);
+        break;
+
+      case ItemTooltipKind.Book:
+        lines = composed.composer.composeBook(composed.context);
+        break;
+
+      default:
+        lines = composed.composer.compose(composed.context, composed.modifierStats);
+        break;
+    }
 
     if (options.separateSocketContributions ?? false) {
       lines = this.withSocketBlocks(item, viewer, options, lines);
     }
 
-    return TooltipEngine.tooltip(composed, lines, options, ItemTooltipComposer.MaxTooltipLength);
+    return TooltipEngine.tooltip(
+      composed,
+      lines,
+      options,
+      TooltipEngine.lengthCapFor(composed.kind),
+    );
+  }
+
+  /**
+   * A set item's tooltip is uncapped; everything else is truncated at the game's buffer size. C#
+   * derives this inside `Tooltip`, which has the kind to hand.
+   */
+  private static lengthCapFor(kind: ItemTooltipKind): number {
+    return kind === ItemTooltipKind.IdentifiedSetItem
+      ? ItemTooltipComposer.UnlimitedTooltipLength
+      : ItemTooltipComposer.MaxTooltipLength;
   }
 
   /**
@@ -746,13 +770,10 @@ export class TooltipEngine {
 
     options = options ?? {};
 
-    const composed = this.compose(
-      item,
-      viewer,
-      options,
-      options.includeSockets ?? true,
-      set.isEquipped ?? false,
-    );
+    const includeSockets =
+      (options.includeSockets ?? true) && !(options.separateSocketContributions ?? false);
+
+    const composed = this.compose(item, viewer, options, includeSockets, set.isEquipped ?? false);
 
     if (composed.kind !== ItemTooltipKind.IdentifiedSetItem) {
       throw new NotSupportedException(
@@ -762,6 +783,36 @@ export class TooltipEngine {
       );
     }
 
+    if (options.showRolledRanges ?? false) {
+      composed.composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
+      composed.composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+    }
+
+    let lines = this.setItemLines(item, viewer, composed, set);
+
+    if (options.separateSocketContributions ?? false) {
+      lines = this.withSocketBlocks(item, viewer, options, lines);
+    }
+
+    return TooltipEngine.tooltip(
+      composed,
+      lines,
+      options,
+      ItemTooltipComposer.UnlimitedTooltipLength,
+    );
+  }
+
+  /**
+   * The set-item body, shared by `render` and `renderSetItem` so that both reach it with the option
+   * handling already applied. Routing the set path through its own entry point is what previously
+   * made showRolledRanges and separateSocketContributions no-ops on all 127 pieces.
+   */
+  private setItemLines(
+    item: Unit,
+    viewer: Unit | null,
+    composed: Composed,
+    set: SetItemTooltipInput,
+  ): readonly ItemTooltipLine[] {
     const builder = new SetItemTooltipBuilder(this.data, this.sets, this.items, this.types);
 
     const content = builder.build(
@@ -775,17 +826,9 @@ export class TooltipEngine {
 
     // GetSetItemsLine returning null returns at 0x48d397 and GetSetsLine at 0x48d3ab, in both
     // cases before a single buffer is appended — the game draws no tooltip at all.
-    const lines =
-      content === null
-        ? []
-        : composed.composer.composeSetItem(composed.context, content, composed.modifierStats);
-
-    return TooltipEngine.tooltip(
-      composed,
-      lines,
-      options,
-      ItemTooltipComposer.UnlimitedTooltipLength,
-    );
+    return content === null
+      ? []
+      : composed.composer.composeSetItem(composed.context, content, composed.modifierStats);
   }
 
   /**

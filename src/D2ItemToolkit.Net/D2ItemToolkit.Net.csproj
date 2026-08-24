@@ -71,7 +71,7 @@
   -->
   <!--
     Visible=false keeps these out of Solution Explorer. They are still embedded — the metadata
-    only controls display. Without it every one of the 32 tables is listed as a project item,
+    only controls display. Without it every one of the 33 tables is listed as a project item,
     because an explicit Include makes a file a project item wherever it lives on disk, and the
     tree then reads as though the game data were part of this project rather than shared input
     sitting at the repository root.

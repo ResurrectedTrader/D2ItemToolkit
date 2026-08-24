@@ -31,6 +31,14 @@ data and need to show it the way a player expects to see it.
 
 > **Pre-1.0.** The public surface may still move between minor versions.
 
+> **Written by Claude, without human supervision.** Every line of both implementations, the tests,
+> and the docs were produced by an AI agent working from the 1.14d disassembly. Nobody has read it
+> line by line. What holds it together is mechanical rather than editorial: a differential test that
+> requires the two implementations to agree byte for byte across ~940 generated cases and ~12,000
+> hostile ones, plus captured game output. So treat the *behaviour* as tested and the *source* as
+> unreviewed — it is dense, it comments oddities at the address that causes them, and it will not
+> read like code a human wrote for other humans.
+
 ## Install
 
 ```bash
@@ -78,8 +86,8 @@ console.log(tip.text);
 ```
 
 Same call chain, camelCased. `TooltipEngine.Embedded` / `.embedded` parses the tables once and
-caches them — hold onto it rather than building an engine per item. Rendering is pure, so one
-engine can serve concurrent callers.
+caches them — hold onto it rather than building an engine per item. Rendering is read-only and safe
+to share between threads.
 
 The tables are inflated **synchronously**, which is what keeps the whole API non-async.
 
@@ -189,12 +197,12 @@ In TypeScript `line.text` is typed `string | null`, so narrow it before use.
 ### Options
 
 Every knob on `TooltipOptions`. The defaults reproduce the game exactly; the three marked **beyond
-the game** deliberately do not, and are off unless you ask for them.
+the game** deliberately do not, and none of them changes the output unless you set it.
 
 | option | default | what it does |
 |---|---|---|
 | `Difficulty` | `0` | `GetDificulity()`. Only a quest item with `questdiffcheck` reads it |
-| `ShopMode` | `0` | 0 outside a shop. 1–9 add the transaction-cost line, and any non-zero value suppresses both usage lines |
+| `ShopMode` | `0` | 0 outside a shop. Any non-zero value suppresses both usage lines; 1–9 also admit the transaction-cost line, which only the set-item path fills today (see the gap below) |
 | `QuestColorPrefix` | `false` | Appends the trailing quest-colour marker |
 | `ClientPlayer` | `null` | The character, when the viewer is a **mercenary** — see below |
 | `IncludeSockets` | `true` | *Beyond the game.* False renders the base item as if nothing were socketed in it |
@@ -304,6 +312,18 @@ Every rendered line also tells you which stat it came from — `line.StatId` and
 for a line that shows no stat — so you can pair the two yourself and decide whether a range becomes
 `(98–141)`, a bar, or a colour.
 
+Some lines speak for more than one stat: `Adds 1-4 fire damage` is `firemindam` and `firemaxdam`
+together, `+2 to All Attributes` stands for four. Those carry `line.Aggregated` and
+`line.ShownStats` — every stat the line shows a number for, in the order the numbers appear.
+`ShownStats` is null when `StatId` is the whole story, so the two cases can be handled uniformly:
+
+```csharp
+int[] stats = line.ShownStats ?? new[] { line.StatId };
+```
+
+Range annotation is written into `line.Text` as each line is built, so `ShowRolledRanges` output
+survives rendering from `Lines` — you do not have to go through `Text` or `ColoredText` to get it.
+
 **A span always matches the number beside it.** That is the rule the three views follow, and it is
 why they disagree. Take a rare armour rolling Fire Resist 11–20, socketed with a jewel rolling
 Fire Resist 5–10:
@@ -351,9 +371,11 @@ Adds 1-4 cold damage [(1-2)-(3-5)]      the first number rolled 1-2, the second 
 `RangeColor` paints the spans distinctly. The annotation is wrapped in a colour marker and a second
 one restoring the line's own, so nothing after it is repainted and the following line is unaffected.
 
-The format is yours — `RangeAnnotation` receives one `RolledStatRange` per number the line prints,
-in print order, and returning null suppresses that line, which is how you show ranges for some
-stats and not others.
+The format is yours — `RangeAnnotation` receives one `RolledStatRange` per STAT the line shows, in
+print order, and returning null or an empty string suppresses the annotation, which is how you show
+ranges for some stats and not others. Stats shown, not numbers printed: the `+2 to all Attributes`
+line above prints one number and hands the callback four ranges, which is why the built-in format
+has a rule for collapsing them.
 
 Three things it deliberately leaves alone:
 
@@ -395,6 +417,7 @@ leaves four candidates, and the one whose every fixed mod the record actually ca
 instead of sitting in `Unattributed`:
 
 ```csharp
+TooltipEngine engine = TooltipEngine.Embedded;
 ItemRollRanges ranges = engine.Ranges(craftedCrown);
 
 if (ranges.CraftedRecipe >= 0)
@@ -405,9 +428,10 @@ if (ranges.CraftedRecipe >= 0)
 ```
 
 It declines rather than guesses. Two families can both fit when the item's own affixes happen to
-supply the other's stats; some slots — a bow, say — no recipe covers at all; and a class-specific
-shield (a paladin auric shield, a necromancer voodoo head) resolves to no slot, because those sit
-beside the ordinary shield type rather than under it. Each leaves `CraftedRecipe` at `-1` and
+supply the other's stats; a base under none of the nine crafted slots — a charm or a quiver, say —
+reaches no recipe at all; and a class-specific shield (a paladin auric shield, a necromancer voodoo
+head) resolves to no slot either, because those sit beside the ordinary shield type rather than
+under it. Each leaves `CraftedRecipe` at `-1` and
 `CraftedRecipeUnknown` true. On the shipped tables it can fail to name a recipe, but it does not
 name the wrong one.
 
@@ -487,7 +511,7 @@ no bit and raises no tier. That distinction is exactly why this is derived rathe
 as a mask; body locations 11 and 12 are the swap pair, and counting them is the easiest way to show
 one bonus tier too many.
 
-`Ranges` takes the same viewer and folds in whichever set tiers it has earned:
+`RangesForViewer` takes the same viewer and folds in whichever set tiers it has earned:
 
 ```csharp
 ItemRollRanges ranges = TooltipEngine.Embedded.RangesForViewer(item, player);
@@ -597,7 +621,7 @@ traced to the instruction that causes it, and the code cites the address.
 |---|---|
 | differential corpus cases, C# vs TypeScript, agreeing layer by layer | **935** |
 | hostile producer-legal inputs, both engines agreeing | **11,972** |
-| tests | **1032** C# / **1049** TypeScript |
+| tests | **1041** C# / **1057** TypeScript |
 | captured client tooltips reproduced byte-identically | **64 / 64** |
 
 The capture set is a private `captures.db` of real client tooltips and is not part of this
@@ -617,15 +641,17 @@ names ("Bob's Hat") is wired for English only — twelve other language cases ar
 transcribed. Point `FromFiles` at another locale's tables and the strings change, but the
 possessive grammar does not.
 
-**Item-level-dependent values.** One property function has two arms that scale with the *item's*
-level, which the record does not carry, so they fall back to level 1. No shipped item reaches them
-— a test asserts that — but a modded table could.
+**Item level, when the capture omits it.** Three property arms scale with the *item's* level: funcs
+11 and 19 when the property's max is non-positive, and func 14's socket cap. The record carries
+`itemLevel` for exactly this, but it is optional, and −1 means "not captured" rather than 0 — the
+game's own floor is 1. Without it those arms floor at level 1 and say so through
+`ItemRollRanges.ItemLevelDependent` rather than reporting a number they cannot know. Supply
+`itemLevel` and they become exact. Note the example C++ producer does not emit it yet, so records
+from it will always report these.
 
 **One property function is unimplemented.** Func 9, and no shipped table carries it — a test walks
-them and fails the build if that stops being true. The rest are all implemented and genuinely
-reached: `Ranges` re-applies them to reconstruct roll spans, which is what put them on the live
-path. (An earlier edition of this line said eight were unimplemented "because nothing calls them";
-both halves are now false.)
+them and fails the build if that stops being true. Every other function is implemented and on the
+live path: `Ranges` re-applies them to reconstruct roll spans.
 
 **The C++ producer is unfinished.** An optional capture half that reads a live game's memory. You
 do not need it to use the library — only to generate records from a running client.

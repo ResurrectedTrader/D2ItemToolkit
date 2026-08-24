@@ -24,7 +24,15 @@ interface ExpectedCase {
   genericRefusal?: string;
   set?: unknown;
   sections?: Record<string, string>;
-  lines?: { section: string; color: number; statId: number; layer: number; text: string }[];
+  lines?: {
+    section: string;
+    color: number;
+    statId: number;
+    layer: number;
+    shownStats: number[] | null;
+    aggregated: boolean;
+    text: string;
+  }[];
   rendered?: string;
   colored?: string;
   ranges?: PackedRanges;
@@ -36,7 +44,15 @@ interface ExpectedCase {
 
 /** The `ranges` object, as `PackRanges` in tools/Reference/Program.cs emits it. */
 interface PackedRanges {
-  stats: { stat: number; layer: number; low: number; high: number; sources: number }[];
+  stats: {
+    stat: number;
+    layer: number;
+    low: number;
+    high: number;
+    displayLow: number;
+    displayHigh: number;
+    sources: number;
+  }[];
   layerVaries: {
     stat: number;
     layerLow: number;

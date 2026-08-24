@@ -17,7 +17,7 @@ namespace D2ItemToolkit
     /// the mask accepts grid type 3 alone (0x62a3f0) — so a set piece in the backpack, or on
     /// weapon swap, colours green while contributing no bit.
     /// </summary>
-    public sealed class SetItemTooltipInput
+    internal sealed class SetItemTooltipInput
     {
         /// <summary>
         /// The <c>setitems.txt</c> row indices GetSetItem 0x486770 would return non-null for, i.e.
