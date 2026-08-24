@@ -136,9 +136,7 @@ namespace D2ItemToolkit
             // as it is built rather than patched onto the finished list.
             if (opts.ShowRolledRanges)
             {
-                composed.Composer.RangeAnnotation =
-                    BuildRangeAnnotation(item, opts, includeSockets);
-                composed.Composer.RangeColor = opts.RangeColor;
+                InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
 
             IReadOnlyList<ItemTooltipLine> lines;
@@ -159,7 +157,7 @@ namespace D2ItemToolkit
 
             if (opts.SeparateSocketContributions)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines);
+                lines = WithSocketBlocks(item, viewer, opts, lines, set.IsEquipped);
             }
 
             return new Tooltip(composed.Kind, lines, composed.Composer, opts);
@@ -169,14 +167,24 @@ namespace D2ItemToolkit
         /// Appends one block per filler BELOW the item. Lines are in display order, so appending
         /// puts them at the bottom, which is where a reader expects "and this is what the gems are
         /// doing".
+        ///
+        /// <paramref name="hostIsEquipped"/> must be the same value <see cref="Compose"/> was given.
+        /// This mode MOVES the fillers out of the item's block; it must never ADD anything the
+        /// merged render would not have shown. A worn set item's fillers are discarded by recalc
+        /// (see <see cref="SocketStatSynthesis.FillersAreDiscardedByRecalc"/>), so they are absent
+        /// from the item's block — and a block listing them below it claimed the item granted stats
+        /// it does not. Reported as "a socketed set piece does not lose socketed stats": on an
+        /// equipped Tal Rasha's Horadric Crest with an Um, nothing moved because nothing was there,
+        /// while a rune block appeared out of nowhere.
         /// </summary>
         private IReadOnlyList<ItemTooltipLine> WithSocketBlocks(
             IUnit item,
             IUnit viewer,
             TooltipOptions options,
-            IReadOnlyList<ItemTooltipLine> body)
+            IReadOnlyList<ItemTooltipLine> body,
+            bool hostIsEquipped)
         {
-            int slot = _socketStats.SlotFor(item);
+            int slot = _socketStats.SlotFor(item, hostIsEquipped);
             if (slot < 0)
             {
                 return body;
@@ -419,17 +427,38 @@ namespace D2ItemToolkit
         /// "Fire Resist +20% [16-30]" on a line whose 20 was the item's half only.
         /// </summary>
         private Func<IReadOnlyList<int>, int, string> BuildRangeAnnotation(
-            IUnit item, TooltipOptions options, bool includeSockets = true)
+            IUnit item,
+            TooltipOptions options,
+            bool includeSockets = true,
+            bool includeBaseDefense = true)
         {
-            ItemRollRanges ranges = includeSockets
+            ItemRollRanges ranges = includeSockets && includeBaseDefense
                 ? Ranges(item)
                 : _ranges.Reconstruct(
                     ItemRecordReader.ReadIdentity(item),
                     ItemStatReader.ReconstructView(item, ItemOwnMods()),
+                    includeSockets ? AllSocketProperties(item) : null,
                     null,
-                    null);
+                    true,
+                    includeBaseDefense);
 
             return Lookup(ByKey(ranges), options);
+        }
+
+        /// <summary>
+        /// The pair a render needs: the SECTION lookup counts the armour's base roll, because the
+        /// Defense line draws base plus modifiers, and the MODIFIER lookup does not, because a
+        /// `+45 Defense` line draws its own contribution alone. Handing both lines one dictionary
+        /// gave the modifier the section's span.
+        /// </summary>
+        private void InstallRangeAnnotations(
+            ItemTooltipComposer composer, IUnit item, TooltipOptions options, bool includeSockets)
+        {
+            composer.RangeAnnotation =
+                BuildRangeAnnotation(item, options, includeSockets, includeBaseDefense: false);
+            composer.SectionRangeAnnotation =
+                BuildRangeAnnotation(item, options, includeSockets);
+            composer.RangeColor = options.RangeColor;
         }
 
         /// <summary>
@@ -648,9 +677,7 @@ namespace D2ItemToolkit
 
             if (opts.ShowRolledRanges)
             {
-                composed.Composer.RangeAnnotation =
-                    BuildRangeAnnotation(item, opts, includeSockets);
-                composed.Composer.RangeColor = opts.RangeColor;
+                InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
 
             IReadOnlyList<ItemTooltipLine> lines =
@@ -658,7 +685,7 @@ namespace D2ItemToolkit
 
             if (opts.SeparateSocketContributions)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines);
+                lines = WithSocketBlocks(item, viewer, opts, lines, set.IsEquipped);
             }
 
             return new Tooltip(composed.Kind, lines, composed.Composer, opts);
@@ -836,10 +863,50 @@ namespace D2ItemToolkit
             // discarded by recalc, which would drop the very properties being ranged.
             return _ranges.Reconstruct(
                 ItemRecordReader.ReadIdentity(item),
-                ItemStatReader.ReconstructView(item, ItemOwnMods()),
+                RecordedForComparison(item),
                 AllSocketProperties(item),
                 earnedSetIds);
         }
+
+        /// <summary>
+        /// What <see cref="ItemRollRanges.OutOfRange"/> and
+        /// <see cref="ItemRollRanges.Unattributed"/> are checked against: the item's own modifiers,
+        /// plus the DEFENSE total.
+        ///
+        /// Defense is the one stat whose span includes a base roll, and the modifier view has no
+        /// base group — so stat 31 was absent from the comparand and the check silently skipped the
+        /// only stat that could disagree with its span. A Skin of the Vipermagi reading
+        /// "Defense: 279 [244-277]" (Serpentskin 111..126 under a fixed 120% ED gives 244..277, so
+        /// 279 needs a base of 127) reported OutOfRange empty, which is the opposite of the signal
+        /// it exists to give.
+        ///
+        /// The total is the op-resolved equipped value — the number the Defense line draws — because
+        /// the span is op-resolved too.
+        /// </summary>
+        private SortedDictionary<int, int> RecordedForComparison(IUnit item)
+        {
+            SortedDictionary<int, int> recorded =
+                ItemStatReader.ReconstructView(item, ItemOwnMods());
+
+            SortedDictionary<int, int> equipped =
+                ItemStatReader.ReconstructView(item, ItemStatView.Equipped());
+            SortedDictionary<int, int> baseStats =
+                ItemStatReader.ReconstructView(item, ItemStatView.BaseOnly());
+
+            ItemStatOps.Resolve(equipped, baseStats, _data.ItemStatCost);
+
+            int key = ItemStatReader.PackStatKey(0, StatDefense);
+
+            int total;
+            if (equipped.TryGetValue(key, out total))
+            {
+                recorded[key] = total;
+            }
+
+            return recorded;
+        }
+
+        private const int StatDefense = 31;
 
         /// <summary>
         /// The same reconstruction, with the earned sets taken FROM THE VIEWER rather than listed

@@ -548,7 +548,7 @@ export class ItemTooltipComposer {
       for (const part of this.splitLines(text as string)) {
         const line = new ItemTooltipLine();
         line.text = firstOfSection
-          ? this.annotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
+          ? this.sectionAnnotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
           : part;
         line.section = section;
         line.color = running;
@@ -751,7 +751,7 @@ export class ItemTooltipComposer {
       for (const part of parts) {
         const line = new ItemTooltipLine();
         line.text = firstOfSection
-          ? this.annotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
+          ? this.sectionAnnotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
           : part;
         line.section = section;
         line.color = running;
@@ -1072,6 +1072,18 @@ export class ItemTooltipComposer {
   rangeAnnotation: ((shownStats: readonly number[], layer: number) => string | null) | null = null;
 
   /**
+   * The same, for a SECTION line rather than a modifier line. Both exist because the Defense line
+   * and a `+45 Defense` modifier line report stat 31 and draw different numbers: the section shows
+   * the base roll plus every modifier, the modifier shows its own contribution alone. One
+   * dictionary served both and gave the modifier the section's span — "+45 Defense [99-131]" on a
+   * Tal Rasha's Horadric Crest, whose 45 is a FIXED set property and could never have rolled.
+   *
+   * Null falls back to `rangeAnnotation`.
+   */
+  sectionRangeAnnotation: ((shownStats: readonly number[], layer: number) => string | null) | null =
+    null;
+
+  /**
    * The colour the annotation is painted in, or -1 to inherit the line's. A marker restoring the
    * line's own colour follows it, so the rest of the line is unaffected — and the running colour is
    * tracked from the UN-annotated text, so an annotation can never bleed into the next line.
@@ -1101,11 +1113,36 @@ export class ItemTooltipComposer {
     shownStats: readonly number[] | null,
     lineColor: number,
   ): string {
-    if (this.rangeAnnotation === null || shownStats === null || shownStats.length === 0) {
+    return this.annotate(part, layer, shownStats, lineColor, this.rangeAnnotation);
+  }
+
+  private sectionAnnotated(
+    part: string,
+    layer: number,
+    shownStats: readonly number[] | null,
+    lineColor: number,
+  ): string {
+    return this.annotate(
+      part,
+      layer,
+      shownStats,
+      lineColor,
+      this.sectionRangeAnnotation ?? this.rangeAnnotation,
+    );
+  }
+
+  private annotate(
+    part: string,
+    layer: number,
+    shownStats: readonly number[] | null,
+    lineColor: number,
+    source: ((shownStats: readonly number[], layer: number) => string | null) | null,
+  ): string {
+    if (source === null || shownStats === null || shownStats.length === 0) {
       return part;
     }
 
-    let annotation = this.rangeAnnotation(shownStats, layer);
+    let annotation = source(shownStats, layer);
     if (annotation === null || annotation.length === 0) {
       return part;
     }

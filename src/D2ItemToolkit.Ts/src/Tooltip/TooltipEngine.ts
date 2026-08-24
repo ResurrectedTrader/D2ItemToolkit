@@ -48,6 +48,9 @@ const LocationEquipped = 1;
 /** dwQualityNo 5. Compared as a number, matching every other quality test in the port. */
 const QualitySet = 5;
 
+/** armorclass. The one stat whose reconstructed span includes a rolled BASE. */
+const StatDefense = 31;
+
 /**
  * The mask's two refusals, 0x62a446. 0x4000 has no name in `ItemRecordFlags` — `SocketStatSynthesis`
  * spells it the same way for the recalc loop's identical pair.
@@ -460,8 +463,7 @@ export class TooltipEngine {
     // Installed BEFORE composing, because the annotation is written into each line's text as it is
     // built rather than patched onto the finished list.
     if (options.showRolledRanges ?? false) {
-      composed.composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
-      composed.composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+      this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
 
     let lines: readonly ItemTooltipLine[];
@@ -480,7 +482,7 @@ export class TooltipEngine {
     }
 
     if (options.separateSocketContributions ?? false) {
-      lines = this.withSocketBlocks(item, viewer, options, lines);
+      lines = this.withSocketBlocks(item, viewer, options, lines, set.isEquipped ?? false);
     }
 
     return TooltipEngine.tooltip(
@@ -504,14 +506,23 @@ export class TooltipEngine {
   /**
    * Appends one block per filler BELOW the item. Lines are in display order, so appending puts them
    * at the bottom, which is where a reader expects "and this is what the gems are doing".
+   *
+   * `hostIsEquipped` must be the same value `compose` was given. This mode MOVES the fillers out of
+   * the item's block; it must never ADD anything the merged render would not have shown. A worn set
+   * item's fillers are discarded by recalc (see `SocketStatSynthesis.fillersAreDiscardedByRecalc`),
+   * so they are absent from the item's block — and a block listing them below it claimed the item
+   * granted stats it does not. Reported as "a socketed set piece does not lose socketed stats": on
+   * an equipped Tal Rasha's Horadric Crest with an Um, nothing moved because nothing was there,
+   * while a rune block appeared out of nowhere.
    */
   private withSocketBlocks(
     item: Unit,
     viewer: Unit | null,
     options: TooltipOptions,
     body: readonly ItemTooltipLine[],
+    hostIsEquipped: boolean,
   ): readonly ItemTooltipLine[] {
-    const slot = this.socketStats.slotFor(item);
+    const slot = this.socketStats.slotFor(item, hostIsEquipped);
     if (slot < 0) {
       return body;
     }
@@ -648,17 +659,38 @@ export class TooltipEngine {
     item: Unit,
     options: TooltipOptions,
     includeSockets = true,
+    includeBaseDefense = true,
   ): (shownStats: readonly number[], layer: number) => string | null {
-    const reconstructed = includeSockets
-      ? this.ranges(item)
-      : this.rangesReconstructor.reconstruct(
-          ItemRecordReader.readIdentity(item),
-          ItemStatReader.reconstructView(item, itemOwnMods()),
-          null,
-          null,
-        );
+    const reconstructed =
+      includeSockets && includeBaseDefense
+        ? this.ranges(item)
+        : this.rangesReconstructor.reconstruct(
+            ItemRecordReader.readIdentity(item),
+            ItemStatReader.reconstructView(item, itemOwnMods()),
+            includeSockets ? this.allSocketProperties(item) : null,
+            null,
+            true,
+            includeBaseDefense,
+          );
 
     return TooltipEngine.lookup(reconstructed, options);
+  }
+
+  /**
+   * The pair a render needs: the SECTION lookup counts the armour's base roll, because the Defense
+   * line draws base plus modifiers, and the MODIFIER lookup does not, because a `+45 Defense` line
+   * draws its own contribution alone. Handing both lines one dictionary gave the modifier the
+   * section's span.
+   */
+  private installRangeAnnotations(
+    composer: ItemTooltipComposer,
+    item: Unit,
+    options: TooltipOptions,
+    includeSockets: boolean,
+  ): void {
+    composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets, false);
+    composer.sectionRangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
+    composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
   }
 
   /**
@@ -784,14 +816,13 @@ export class TooltipEngine {
     }
 
     if (options.showRolledRanges ?? false) {
-      composed.composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
-      composed.composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+      this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
 
     let lines = this.setItemLines(item, viewer, composed, set);
 
     if (options.separateSocketContributions ?? false) {
-      lines = this.withSocketBlocks(item, viewer, options, lines);
+      lines = this.withSocketBlocks(item, viewer, options, lines, set.isEquipped ?? false);
     }
 
     return TooltipEngine.tooltip(
@@ -1122,10 +1153,41 @@ export class TooltipEngine {
     // recalc, which would drop the very properties being ranged.
     return this.rangesReconstructor.reconstruct(
       ItemRecordReader.readIdentity(item),
-      ItemStatReader.reconstructView(item, itemOwnMods()),
+      this.recordedForComparison(item),
       this.allSocketProperties(item),
       earnedSetIds,
     );
+  }
+
+  /**
+   * What `ItemRollRanges.outOfRange` and `ItemRollRanges.unattributed` are checked against: the
+   * item's own modifiers, plus the DEFENSE total.
+   *
+   * Defense is the one stat whose span includes a base roll, and the modifier view has no base
+   * group — so stat 31 was absent from the comparand and the check silently skipped the only stat
+   * that could disagree with its span. A Skin of the Vipermagi reading "Defense: 279 [244-277]"
+   * (Serpentskin 111..126 under a fixed 120% ED gives 244..277, so 279 needs a base of 127)
+   * reported outOfRange empty, which is the opposite of the signal it exists to give.
+   *
+   * The total is the op-resolved equipped value — the number the Defense line draws — because the
+   * span is op-resolved too.
+   */
+  private recordedForComparison(item: Unit): Map<number, number> {
+    const recorded = ItemStatReader.reconstructView(item, itemOwnMods());
+
+    const equipped = ItemStatReader.reconstructView(item, ItemStatView.equipped());
+    const baseStats = ItemStatReader.reconstructView(item, ItemStatView.baseOnly());
+
+    ItemStatOps.resolve(equipped, baseStats, this.data.itemStatCost);
+
+    const key = ItemStatReader.packStatKey(0, StatDefense);
+
+    const total = equipped.get(key);
+    if (total !== undefined) {
+      recorded.set(key, total);
+    }
+
+    return recorded;
   }
 
   /**

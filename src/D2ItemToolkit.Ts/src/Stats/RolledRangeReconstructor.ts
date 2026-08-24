@@ -94,6 +94,7 @@ export interface RolledStatRange {
   readonly displayHigh: number;
 }
 
+const StatArmorPercent = 16;
 const StatChargedSkill = 204;
 const FirstByTime = 268;
 const LastByTime = 303;
@@ -257,6 +258,11 @@ export class RolledRangeReconstructor {
   ) {}
 
   /**
+   * `includeBaseDefense` false drops the armour's own `minac`..`maxac` roll, leaving the item's
+   * MODIFIERS alone. The Defense SECTION draws the base plus every modifier and wants it; a
+   * `+45 Defense` modifier line draws its own contribution and does not â with it, that line was
+   * offered the section's span.
+   *
    * `includeOwnSources` false applies ONLY `socketProperties` — no affixes, no unique row, nothing
    * of the item's own. That is what a socket-only view needs: asking for "just the fillers" while
    * the identity's own sources were folded in silently gave a gem's line the HOST's affix span.
@@ -267,6 +273,7 @@ export class RolledRangeReconstructor {
     socketProperties: readonly ItemProperty[] | null,
     earnedSetIds: readonly number[] | null,
     includeOwnSources = true,
+    includeBaseDefense = true,
   ): ItemRollRanges {
     const gathered: Sourced[] = [];
 
@@ -321,8 +328,16 @@ export class RolledRangeReconstructor {
     // Gated with the rest of the item's own sources: the base armour roll IS one, so a socket-only
     // reconstruction that added it gave a gem block the HOST's base span — "+30 Defense [33-35]"
     // where 33-35 was the cap's 3..5 plus the rune's fixed 30.
-    if (includeOwnSources) {
-      this.addBaseDefense(item, lowStats, highStats, lowBase, highBase, sourceOf);
+    if (includeOwnSources && includeBaseDefense) {
+      this.addBaseDefense(
+        item,
+        lowStats,
+        highStats,
+        lowBase,
+        highBase,
+        sourceOf,
+        RolledRangeReconstructor.maximisesBaseDefense(gathered, low.properties),
+      );
     }
 
     // The Defense line draws the OP-RESOLVED value, so its span has to be resolved too. A Large
@@ -641,6 +656,31 @@ export class RolledRangeReconstructor {
     return stats;
   }
 
+  /**
+   * Whether any gathered property writes `item_armor_percent`, which is what sends the base
+   * defense through ITEMMOD_MaximizeStatForEnhanced. Checked by STAT rather than by code, because
+   * the game's dispatch table keys the handler off the property row's stat id.
+   */
+  private static maximisesBaseDefense(
+    gathered: readonly Sourced[],
+    properties: PropertiesTable,
+  ): boolean {
+    for (const entry of gathered) {
+      const row = properties.rowAt(entry.property.propertyId);
+      if (row === null) {
+        continue;
+      }
+
+      for (const stat of row.stat) {
+        if (stat === StatArmorPercent) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   /** True when any of the property's seven sets uses func 12 or 36. */
   private static rollsTheLayer(properties: PropertiesTable, propertyId: number): boolean {
     const row = properties.getRow(propertyId);
@@ -714,10 +754,48 @@ export class RolledRangeReconstructor {
     lowBase: Map<number, number>,
     highBase: Map<number, number>,
     sourceOf: Map<number, RollSources>,
+    maximised: boolean,
   ): void {
     let minac = this.items.getInt(item.classId, 'minac');
     let maxac = this.items.getInt(item.classId, 'maxac');
     if (minac <= 0 && maxac <= 0) {
+      return;
+    }
+
+    // An `ac%` property does not just scale the base — it REPLACES it.
+    //
+    // ITEMMOD_MaximizeStatForEnhanced 0x65ccc0, cases 16 and 31: for an `armo` item (`push 32h` at
+    // 0x65ccfc) with a non-zero maxac (0x65cd0c reads the items record at +0xD0, the same field
+    // ITEM_RollBaseArmorClass rolls against), it computes `max(getUnitStat(31) + 1, maxac + 1)`
+    // (0x65cd29-0x65cd30) and STORES it (0x65cd39). Every roll ITEM_RollBaseArmorClass can produce
+    // is <= maxac — it halts the game otherwise (0x5563b2) — so both arms land on exactly
+    // maxac + 1.
+    //
+    // Only `ac%` reaches it. The per-property dispatch table at 0x745b58 is {handler, statId} with
+    // an 8-byte stride indexed by properties.txt row: row 0 `ac` (stat 31) takes
+    // PropertyFunc_SimpleStatWrapper, which passes the "enhanced" flag as 0 (`push 0` at
+    // 0x65d1ce), while row 5 `ac%` (stat 16) takes PropertyFunc_SimpleStatWrapper2, which passes 1
+    // (`push 1` at 0x65d2be) — and ITEMMOD_ApplyRandomStatValue maximises unconditionally when
+    // that flag is set (0x65cf52).
+    //
+    // So the base does not roll at all here: Skin of the Vipermagi is 127 every time, not 111..126,
+    // and its Defense is a fixed 279 rather than a span.
+    if (maximised) {
+      // The store is ABSOLUTE and reads the RAW items.txt maxac, so it overwrites whatever the
+      // ethereal bonus did rather than scaling with it. The ordering against
+      // ITEMMOD_ApplyEtherealBonus is untraced and no captured ethereal armour carries `ac%`, so
+      // the literal reading is what is modelled.
+      const fixedBase = maxac + 1;
+      const maximisedKey = ItemStatReader.packStatKey(0, StatDefense);
+
+      lowStats.set(maximisedKey, (lowStats.get(maximisedKey) ?? 0) + fixedBase);
+      highStats.set(maximisedKey, (highStats.get(maximisedKey) ?? 0) + fixedBase);
+      lowBase.set(maximisedKey, fixedBase);
+      highBase.set(maximisedKey, fixedBase);
+      sourceOf.set(
+        maximisedKey,
+        (sourceOf.get(maximisedKey) ?? RollSources.None) | RollSources.Base,
+      );
       return;
     }
 

@@ -16,7 +16,7 @@ const Engine = TooltipEngine.embedded;
 const Items = new ItemTable(Data.weapons, Data.armor, Data.misc);
 
 /** Griswold's Valor — a Death Mask, three sockets. Post-splice setitems row. */
-const SocketableSetHelm = 81;
+const SocketableSetHelm = 80;
 
 const StatDefense = 31;
 const StatArmorPercent = 16;
@@ -38,7 +38,7 @@ function socketedSetHelm(): Unit {
     quality: 5,
     fileIndex: SocketableSetHelm,
     itemFlags: ItemRecordFlags.Identified | ItemRecordFlags.Socketed,
-    location: 1,
+    location: 3,
     x: 1,
     statsLists: [
       {
@@ -141,14 +141,21 @@ describe('reported defects', () => {
     const defAffix = firstAffixGranting('ac%');
     expect(defAffix).toBeGreaterThan(0);
 
+    const largeShield = Items.classIdForCode('lrg');
+
+    // maxac + 1, because the `ac%` affix maximises the base — see DefenseOutOfRange.test.ts. A
+    // hand-authored roll inside minac..maxac is a record the game cannot produce, and the span then
+    // correctly refuses to contain it.
+    const baseDefense = Items.getInt(largeShield, 'maxac') + 1;
+
     const shield = createUnit({
       unitType: 4,
-      classId: Items.classIdForCode('lrg'),
+      classId: largeShield,
       quality: 4,
       itemFlags: ItemRecordFlags.Identified,
       magicPrefix: [defAffix, 0, 0],
       statsLists: [
-        { stateNo: 0, flags: ListFlagsExtended, stats: [{ id: StatDefense, value: 13 }] },
+        { stateNo: 0, flags: ListFlagsExtended, stats: [{ id: StatDefense, value: baseDefense }] },
         {
           stateNo: 0,
           flags: ListFlagsMagic,

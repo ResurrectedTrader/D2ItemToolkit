@@ -1097,6 +1097,19 @@ namespace D2ItemToolkit
         internal Func<IReadOnlyList<int>, int, string> RangeAnnotation;
 
         /// <summary>
+        /// The same, for a SECTION line rather than a modifier line. Both exist because the Defense
+        /// line and a `+45 Defense` modifier line report stat 31 and draw different numbers: the
+        /// section shows the base roll plus every modifier, the modifier shows its own contribution
+        /// alone. One dictionary served both and gave the modifier line the section's span —
+        /// "+45 Defense [99-131]" on a Tal Rasha's Horadric Crest, whose 45 is a FIXED set property
+        /// and could never have rolled at all.
+        ///
+        /// Null falls back to <see cref="RangeAnnotation"/>, which is what a caller building a
+        /// composer without the engine gets.
+        /// </summary>
+        internal Func<IReadOnlyList<int>, int, string> SectionRangeAnnotation;
+
+        /// <summary>
         /// The colour the annotation is painted in, or -1 to inherit the line's. A marker restoring
         /// the line's own colour follows it, so the rest of the line is unaffected — and the
         /// running colour is tracked from the UN-annotated text, so an annotation can never bleed
@@ -1124,19 +1137,33 @@ namespace D2ItemToolkit
         /// </summary>
         private string Annotated(string part, int layer, int statId, int lineColor)
         {
-            return Annotated(part, layer, statId < 0 ? null : new[] { statId }, lineColor);
+            return Annotate(
+                part,
+                layer,
+                statId < 0 ? null : new[] { statId },
+                lineColor,
+                SectionRangeAnnotation ?? RangeAnnotation);
         }
 
         private string Annotated(
             string part, int layer, IReadOnlyList<int> shownStats, int lineColor)
         {
-            if (RangeAnnotation == null || shownStats == null || shownStats.Count == 0
-                || part == null)
+            return Annotate(part, layer, shownStats, lineColor, RangeAnnotation);
+        }
+
+        private string Annotate(
+            string part,
+            int layer,
+            IReadOnlyList<int> shownStats,
+            int lineColor,
+            Func<IReadOnlyList<int>, int, string> source)
+        {
+            if (source == null || shownStats == null || shownStats.Count == 0 || part == null)
             {
                 return part;
             }
 
-            string annotation = RangeAnnotation(shownStats, layer);
+            string annotation = source(shownStats, layer);
             if (string.IsNullOrEmpty(annotation))
             {
                 return part;

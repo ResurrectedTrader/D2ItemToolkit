@@ -25,8 +25,21 @@ namespace D2ItemToolkit.Tests
         private static readonly ItemTable Items = new ItemTable(
             Data.Weapons, Data.Armor, Data.Misc);
 
-        /// <summary>Griswold's Valor — a Death Mask, three sockets. Post-splice setitems row.</summary>
-        private const int SocketableSetHelm = 81;
+        /// <summary>
+        /// Tal Rasha's Horadric Crest, `xsk`, a Death Mask — the piece the report named. Post-splice
+        /// setitems row, 0-based. (81 is Griswold's Valor, which is a Corona; an earlier revision
+        /// paired that index with this item code and the two disagreed.)
+        /// </summary>
+        private const int SocketableSetHelm = 80;
+
+        /// <summary>
+        /// Carried, NOT worn. A worn set item's fillers are discarded by the recalc, so there is
+        /// nothing for the separated mode to move and nothing for a range to describe —
+        /// <see cref="WornSetItemSocketTests"/> pins that case. The bug these tests cover is that
+        /// the set path ignored both options outright, which needs a piece the fillers still apply
+        /// to.
+        /// </summary>
+        private const int LocationStash = 3;
 
         private const int StatDefense = 31;
         private const int StatArmorPercent = 16;
@@ -45,7 +58,7 @@ namespace D2ItemToolkit.Tests
             helm.Quality = ItemQualityNo.Set;
             helm.FileIndex = SocketableSetHelm;
             helm.ItemFlags = ItemRecordFlags.Identified | ItemRecordFlags.Socketed;
-            helm.Location = 1;
+            helm.Location = LocationStash;
             helm.X = 1;
 
             helm.StatsLists.Add(
@@ -128,8 +141,13 @@ namespace D2ItemToolkit.Tests
             shield.ItemFlags = ItemRecordFlags.Identified;
             shield.MagicPrefix[0] = defAffix;
 
+            // maxac + 1, because the `ac%` affix maximises the base — see
+            // DefenseOutOfRangeTests. A hand-authored roll inside minac..maxac is a record the
+            // game cannot produce, and the span then correctly refuses to contain it.
+            int baseDefense = Engine.Items.GetInt(shield.ClassId, "maxac") + 1;
+
             shield.StatsLists.Add(
-                new UnitStatList(0, ItemStatListFlags.Extended).Add(StatDefense, 13));
+                new UnitStatList(0, ItemStatListFlags.Extended).Add(StatDefense, baseDefense));
             shield.StatsLists.Add(
                 new UnitStatList(0, ItemStatListFlags.Magic).Add(StatArmorPercent, pct));
 
