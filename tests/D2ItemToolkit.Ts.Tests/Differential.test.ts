@@ -36,6 +36,7 @@ interface ExpectedCase {
   rendered?: string;
   colored?: string;
   ranges?: PackedRanges;
+  mergedStats?: PackedMergedStats;
   annotated?: string;
   socketsSplit?: string;
   breakdown?: PackedBreakdown;
@@ -66,6 +67,13 @@ interface PackedRanges {
   unsupportedFuncs: number[];
   craftedRecipeUnknown: boolean;
   craftedRecipe: number;
+}
+
+/** The `mergedStats` object, as `PackMergedStats` in tools/Reference/Program.cs emits it. */
+interface PackedMergedStats {
+  stats: { stat: number; layer: number; value: number }[];
+  fillersIgnoredBecauseWorn: boolean;
+  excludedPackedStats: number[];
 }
 
 /** The four breakdown buckets as text, as `Breakdown` in tools/Reference/Program.cs emits them. */
@@ -370,6 +378,9 @@ describe.skipIf(!engineReady)('the two implementations agree', () => {
         // thing that puts the affix, unique, runeword and superior property handlers in front of the
         // differential — no rendering path reaches them.
         'ranges',
+        // The merged TOTALS. Nothing above reaches them: they fold the gems.txt synthesis and
+        // op 13 into one view and ignore the worn-set discard, which no render path does.
+        'mergedStats',
         // The two opt-in render modes. Their formatter, colour wrapping and block layout are
         // otherwise covered only by hand-written tests on each side, which cannot catch the two
         // implementations agreeing to differ.

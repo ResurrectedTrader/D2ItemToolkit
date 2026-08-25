@@ -24,6 +24,7 @@ import { SocketStatSynthesis } from './Stats/SocketStatSynthesis.js';
 import { TooltipEngine } from './Tooltip/TooltipEngine.js';
 import { MagicAffixTable } from './Tables/MagicAffixTable.js';
 import { RolledRangeReconstructor, type ItemRollRanges } from './Stats/RolledRangeReconstructor.js';
+import type { ItemMergedStats } from './Stats/MergedStats.js';
 import { Int32 } from './Types.js';
 
 // The differential harness. NOT part of the package's public surface — it deliberately reaches
@@ -56,6 +57,7 @@ export interface RenderedRecord {
   rendered?: string;
   colored?: string;
   ranges?: PackedRanges;
+  mergedStats?: PackedMergedStats;
   annotated?: string;
   socketsSplit?: string;
   breakdown?: PackedBreakdown;
@@ -86,6 +88,13 @@ interface PackedRanges {
   unsupportedFuncs: number[];
   craftedRecipeUnknown: boolean;
   craftedRecipe: number;
+}
+
+/** The `mergedStats` object, as `PackMergedStats` in tools/Reference/Program.cs emits it. */
+interface PackedMergedStats {
+  stats: { stat: number; layer: number; value: number }[];
+  fillersIgnoredBecauseWorn: boolean;
+  excludedPackedStats: number[];
 }
 
 /** The four breakdown buckets as text, matching `Breakdown` in tools/Reference/Program.cs. */
@@ -160,6 +169,14 @@ function engine(): TooltipEngine {
   }
 
   return cachedEngine;
+}
+
+function packMergedStats(source: ItemMergedStats): PackedMergedStats {
+  return {
+    stats: source.stats.map(s => ({ stat: s.statId, layer: s.layer, value: s.value })),
+    fillersIgnoredBecauseWorn: source.fillersIgnoredBecauseWorn,
+    excludedPackedStats: [...source.excludedPackedStats],
+  };
 }
 
 function packRanges(source: ItemRollRanges): PackedRanges {
@@ -442,6 +459,11 @@ export function renderRecord(
         engine().earnedSetIdsOf(wearer),
       ),
     );
+
+    // The TOTALS surface, which shares nothing with the render path: it folds the gems.txt
+    // synthesis and op 13 into one merged view and deliberately IGNORES the worn-set discard, so
+    // none of that is reachable through the layers above.
+    payload.mergedStats = packMergedStats(engine().mergedStats(unit));
 
     const sections = new RecordSections(
       data,

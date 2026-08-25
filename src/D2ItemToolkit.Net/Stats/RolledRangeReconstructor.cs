@@ -84,7 +84,17 @@ namespace D2ItemToolkit
         /// </summary>
         public bool IsPackedEncoding
         {
-            get { return StatId == StatChargedSkill || (StatId >= FirstByTime && StatId <= LastByTime); }
+            get { return IsPackedStat(StatId); }
+        }
+
+        /// <summary>
+        /// The same test as <see cref="IsPackedEncoding"/>, for a bare stat id — so a caller
+        /// deciding which stats may be summed reads the rule from here rather than deriving its own
+        /// from `descFunc`. Two derivations of one fact drift; this is the owner.
+        /// </summary>
+        public static bool IsPackedStat(int statId)
+        {
+            return statId == StatChargedSkill || (statId >= FirstByTime && statId <= LastByTime);
         }
 
         /// <summary>

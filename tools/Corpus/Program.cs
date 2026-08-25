@@ -1332,6 +1332,9 @@ namespace D2ItemToolkit.Tools
                 + "{ \"id\": 2, \"value\": " + (20 + level) + " } ] } ] }";
         }
 
+        /// <summary>setitems.txt post-splice, 0-based. `xsk`, a Death Mask.</summary>
+        private const int TalRashasHoradricCrest = 80;
+
         /// <summary>
         /// A set piece as a WEARER carries it, at a given location. `location` 1 is the body and `x`
         /// is then the equip slot, which is what separates a worn piece from one on the alternate
@@ -1383,6 +1386,27 @@ namespace D2ItemToolkit.Tools
             cases.Add(Case("setderive-inventory-sibling", hovered,
                 Player(1, 40, self + ", " + CarriedPiece(Mantle, "rng", 1, 3)
                     + ", " + CarriedPiece(Wings, "amu", 3, 0))));
+
+            // A WORN set piece with a rune in it. ITEM_RecalcAllEquippedItems 0x4c1350 throws an
+            // equipped set item's fillers away, so Render draws none of the rune's mods â while
+            // MergedStats deliberately keeps them and reports the disagreement through
+            // FillersIgnoredBecauseWorn. Nothing else in the corpus sets that flag, so without
+            // this case the whole worn-set arm of the totals surface is unpoliced.
+            int deathMask = Items.ClassIdForCode("xsk");
+            int umRune = Items.ClassIdForCode("r22");
+            if (deathMask >= 0 && umRune >= 0)
+            {
+                string socketedCrest = "{ \"unitType\": 4, \"classId\": " + deathMask
+                    + ", \"quality\": 5, \"itemFlags\": 2064"
+                    + ", \"fileIndex\": " + TalRashasHoradricCrest
+                    + ", \"location\": 1, \"x\": 1"
+                    + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, "
+                    + "\"stats\": [ { \"id\": 31, \"value\": 76 }, { \"id\": 194, \"value\": 1 } ] } ]"
+                    + ", \"items\": [ { \"unitType\": 4, \"classId\": " + umRune
+                    + ", \"itemFlags\": 16 } ] }";
+
+                cases.Add(Case("setderive-worn-socketed", socketedCrest, Player(1, 70, "")));
+            }
 
             // The same third piece on the ALTERNATE WEAPON SET. Owned, green, and still no tier —
             // the one case that separates the owned predicate from the worn one.

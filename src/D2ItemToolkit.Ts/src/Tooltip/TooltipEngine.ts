@@ -31,9 +31,11 @@ import { SetTable, type SetItemRecord } from '../Tables/SetTable.js';
 import { MagicAffixTable } from '../Tables/MagicAffixTable.js';
 import {
   RolledRangeReconstructor,
+  isPackedStat,
   type ItemRollRanges,
   type RolledStatRange,
 } from '../Stats/RolledRangeReconstructor.js';
+import type { ItemMergedStats, MergedStat, MergedStatsOptions } from '../Stats/MergedStats.js';
 import { SetItemTooltipBuilder, popCount, type SetItemTooltipInput } from './SetItemTooltip.js';
 import { NotSupportedException } from '../Types.js';
 
@@ -325,7 +327,7 @@ function socketContributions(item: Unit, synthesis: SocketStatSynthesis): Map<nu
   }
 
   // Same reason as in compose: a captured gem or rune has no chain of its own.
-  for (const [key, value] of synthesis.contributions(item)) {
+  for (const [key, value] of synthesis.contributions(item, false)) {
     const existing = merged.get(key);
     merged.set(key, existing === undefined ? value : Int32.of(existing + value));
   }
@@ -702,7 +704,9 @@ export class TooltipEngine {
     host: Unit,
     options: TooltipOptions,
   ): (shownStats: readonly number[], layer: number) => string | null {
-    const slot = this.socketStats.slotFor(host);
+    // The socket bucket of a breakdown is what the fillers are worth, not what a recalc has
+    // currently left on the item.
+    const slot = this.socketStats.slotFor(host, false);
     const properties: ItemProperty[] = [];
     const byKey = new Map<number, RolledStatRange>();
 
@@ -1135,6 +1139,131 @@ export class TooltipEngine {
   }
 
   /**
+   * What the item's stats ADD UP TO — its base array, its own affix / unique / setitems / runeword
+   * nodes, what its socket fillers grant, and op 13 folded in. One entry per (stat, layer), in the
+   * raw encoding the record carries.
+   *
+   * This is the question a stored item answers, and it is NOT the one `render` answers. A gem or
+   * rune arrives with an empty stat chain, so without this a caller has no way to see that an Um
+   * grants the helm it sits in `All Resistances +15`; and an item's own Defense is split across its
+   * base array and its affixes with the total written down nowhere, so `31` reads 76 and 45 rather
+   * than 121.
+   *
+   * Set BONUSES are excluded by default — they belong to the wearer's other pieces rather than to
+   * this item — and the worn-set filler discard is deliberately ignored; see
+   * `ItemMergedStats.fillersIgnoredBecauseWorn`.
+   */
+  // Pass an ITEM. `Unit.items` carries two relations — socket fillers on an item, carried gear on
+  // a wearer — and this reads it as the first, so handing it a PLAYER folds every carried item in
+  // as though it were socketed.
+  mergedStats(item: Unit, options: MergedStatsOptions | null = {}): ItemMergedStats {
+    requireUnit(item, 'item');
+
+    const opts = options ?? {};
+    const includeSockets = opts.includeSockets ?? true;
+
+    const view =
+      (opts.includeSetBonuses ?? false) ? ItemStatView.equipped() : ItemStatView.forSale();
+
+    // BOTH filler channels, because they are disjoint and each covers what the other cannot. The
+    // VIEW walks a filler's own captured stat lists, which is the only place a JEWEL's affixes
+    // live; contributions synthesises from gems.txt and returns nothing for any filler that already
+    // carries stats, precisely so the two cannot double-count.
+    //
+    // Taking only the synthesis therefore counted a jewel ZERO times — and would have lost every
+    // gem and rune of a server-side capture, which records the mods the engine already assigned —
+    // while socketFillerStats reported them, so the two entry points added in one change disagreed
+    // about the same filler.
+    view.includeSockets = includeSockets;
+
+    let merged = ItemStatReader.reconstructView(item, view);
+    const baseStats = ItemStatReader.reconstructView(item, ItemStatView.baseOnly());
+
+    // hostIsEquipped FALSE on purpose. render passes the item's real state here, which is what
+    // correctly gives a worn set piece none of its fillers; these totals answer what the item WOULD
+    // grant, so an item cannot drop out of a search because something equipped it.
+    let synthesised: ReadonlyMap<number, number> = new Map<number, number>();
+    if (includeSockets) {
+      synthesised = this.socketStats.contributions(item, false);
+      merged = addInto(merged, synthesised);
+    }
+
+    // dropPercents false: `ac%` and the enhanced-damage pair are drawn as their own lines, so a
+    // caller indexing modifiers wants them beside the target they resolved onto.
+    ItemStatOps.resolve(merged, baseStats, this.data.itemStatCost, false);
+
+    const stats: MergedStat[] = [];
+    const packed = new Set<number>();
+
+    for (const key of [...merged.keys()].sort((a, b) => a - b)) {
+      const statId = ItemStatReader.statFromKey(key);
+
+      if (isPackedStat(statId)) {
+        packed.add(statId);
+        continue;
+      }
+
+      const value = merged.get(key) ?? 0;
+      if (value !== 0) {
+        stats.push({ statId, layer: ItemStatReader.layerFromKey(key), value });
+      }
+    }
+
+    // The first term is what the SYNTHESIS contributed, not merely that a filler exists. Only the
+    // synthesis is gated on the recalc discard — a jewel's stats arrive through the view, which
+    // render does not gate either — so a socketed JEWEL makes the two views agree, and a flag
+    // raised on "has a filler" claimed a disagreement that was not there.
+    return {
+      stats,
+      fillersIgnoredBecauseWorn:
+        synthesised.size !== 0 &&
+        SocketStatSynthesis.fillersAreDiscardedByRecalc(item, item.location === LocationEquipped),
+      excludedPackedStats: [...packed].sort((a, b) => a - b),
+    };
+  }
+
+  /**
+   * What ONE filler grants the host it sits in, so a caller can store it against the filler rather
+   * than only against the total. A gem or rune is synthesised from gems.txt keyed by the host's
+   * `gemapplytype`, which is why the host is needed; a JEWEL carries its own affixes instead and
+   * those are what come back.
+   *
+   * The slot is items.txt `gemapplytype`, and a row that takes no sockets at all still reads 0
+   * there — the weapon column — so a non-empty result is NOT evidence that the host is socketable.
+   * 235 of the 659 rows with a usable gemapplytype have `gemsockets` 0. Ask `items` for
+   * `gemsockets` if that is the question. Empty only when the row's gemapplytype is outside 0..2.
+   */
+  socketFillerStats(filler: Unit, host: Unit): readonly MergedStat[] {
+    requireUnit(filler, 'filler');
+    requireUnit(host, 'host');
+
+    // Not the host's real equipped state, matching mergedStats: the question is what the filler
+    // contributes, not whether a recalc has currently thrown it away.
+    const slot = this.socketStats.slotFor(host, false);
+    if (slot < 0) {
+      return [];
+    }
+
+    let contribution = this.socketStats.contribution(filler, slot);
+    if (contribution.size === 0) {
+      // A jewel's mods are captured on the jewel itself, so synthesising would count them twice;
+      // its own modifier view is what it contributes.
+      contribution = ItemStatReader.reconstructView(filler, ItemStatView.modifiers());
+    }
+
+    const stats: MergedStat[] = [];
+    for (const key of [...contribution.keys()].sort((a, b) => a - b)) {
+      const statId = ItemStatReader.statFromKey(key);
+      const value = contribution.get(key) ?? 0;
+
+      if (!isPackedStat(statId) && value !== 0) {
+        stats.push({ statId, layer: ItemStatReader.layerFromKey(key), value });
+      }
+    }
+
+    return stats;
+  }
+  /**
    * The span each of the item's stats could have rolled within, rebuilt from the tables its own
    * record points at — the affix ids it stores, its UniqueItems or SetItems row, its runeword, its
    * superior modifier and its socket fillers, plus the base Defense roll.
@@ -1199,9 +1328,9 @@ export class TooltipEngine {
    * "Fire Resist +28% [11-20]", where 28 was item plus jewel but 11-20 was the item alone.
    */
   private allSocketProperties(item: Unit): ItemProperty[] {
-    const properties: ItemProperty[] = [...this.socketStats.fillerProperties(item)];
+    const properties: ItemProperty[] = [...this.socketStats.fillerProperties(item, false)];
 
-    const slot = this.socketStats.slotFor(item);
+    const slot = this.socketStats.slotFor(item, false);
     if (slot < 0) {
       return properties;
     }

@@ -42,13 +42,19 @@ export {
   type ItemTooltipLine,
 } from './Tooltip/ItemTooltip.js';
 
-// What `TooltipEngine.ranges` gives back.
+// What `TooltipEngine.ranges` gives back. `isPackedStat` is exported so a caller deciding which
+// stats may be summed reads that rule from here rather than deriving its own.
 export {
   RollSources,
+  isPackedStat,
   type ItemRollRanges,
   type RolledLayerRange,
   type RolledStatRange,
 } from './Stats/RolledRangeReconstructor.js';
+
+// What `TooltipEngine.mergedStats` and `socketFillerStats` give back: an item's stats as TOTALS
+// rather than as the statlist chain, which is the question a stored item answers.
+export type { ItemMergedStats, MergedStat, MergedStatsOptions } from './Stats/MergedStats.js';
 
 // The DTO for an identified set item. Only what the item document cannot say: which siblings the
 // viewer holds, the two worn masks, whether the piece is equipped, and the full-set stat block.

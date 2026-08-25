@@ -19,6 +19,7 @@ interface ExpectedCase {
   rendered?: string;
   colored?: string;
   ranges?: unknown;
+  mergedStats?: unknown;
   error?: string;
 }
 
@@ -75,6 +76,11 @@ describe('the two implementations agree on the adversarial corpus', () => {
         // read. These records are hostile, so this is where a handler that survives a legal roll
         // but not an implausible one shows up.
         'ranges',
+        // The merged TOTALS. The reference has been writing these into the expected blob for every
+        // case; leaving them out of this list meant ~3MB of reference data nothing read. The
+        // hostile corpus is exactly where an int32 overflow or an ordering difference in the merge
+        // would show up, so it is the corpus this layer most wants.
+        'mergedStats',
         'error',
       ] as const) {
         const a = JSON.stringify(want[layer] ?? null);

@@ -59,7 +59,8 @@ namespace D2ItemToolkit
         public static void Resolve(
             IDictionary<int, int> merged,
             IDictionary<int, int> baseStats,
-            IItemStatOpTable table)
+            IItemStatOpTable table,
+            bool dropPercents = true)
         {
             if (merged == null || baseStats == null || table == null)
             {
@@ -90,7 +91,18 @@ namespace D2ItemToolkit
                               + ApplyPercent(baseValue, percent);
             }
 
-            DropResolvedPercents(merged, table);
+            // The game does not STORE the percent on an item — 0x626821 tests
+            // `dwOwnerType == UNIT_ITEM` and clears the update flag, and 0x626847 then skips the
+            // store — and the render depends on that absence, which is what stops
+            // INV_FormatDurabilityText colouring a Superior weapon's max (see
+            // <see cref="DropResolvedPercents"/>).
+            //
+            // A merged-stat consumer wants it anyway: the tooltip draws `+150% Enhanced Defense` as
+            // its own line, so a caller indexing what an item grants has to be able to find it.
+            if (dropPercents)
+            {
+                DropResolvedPercents(merged, table);
+            }
         }
 
         /// <summary>

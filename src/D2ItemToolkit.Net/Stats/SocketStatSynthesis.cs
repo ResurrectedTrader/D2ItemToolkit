@@ -86,11 +86,15 @@ namespace D2ItemToolkit
         }
 
         /// <summary>
+        /// <paramref name="hostIsEquipped"/> has NO default on purpose. It decides whether the
+        /// recalc has already thrown the fillers away, and a silent false is how the separated
+        /// render grew a filler block for stats the game does not grant. Every caller states it.
+        ///
         /// The union over every filler that carries no captured stats of its own. Fillers that DO
         /// carry them are left alone: a server-side producer records the mods the engine already
         /// assigned, and synthesising on top would count them twice.
         /// </summary>
-        public SortedDictionary<int, int> Contributions(IUnit host, bool hostIsEquipped = false)
+        public SortedDictionary<int, int> Contributions(IUnit host, bool hostIsEquipped)
         {
             var merged = new SortedDictionary<int, int>();
 
@@ -181,7 +185,7 @@ namespace D2ItemToolkit
         /// exactly as funcs 11 and 19 read theirs. So a gem or rune contributes no span at all; a
         /// socketed JEWEL does, but from its own affixes rather than from here.
         /// </summary>
-        public IEnumerable<ItemProperty> FillerProperties(IUnit host, bool hostIsEquipped = false)
+        public IEnumerable<ItemProperty> FillerProperties(IUnit host, bool hostIsEquipped)
         {
             if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
             {
@@ -218,7 +222,7 @@ namespace D2ItemToolkit
         /// items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
         /// (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
         /// </summary>
-        public int SlotFor(IUnit host, bool hostIsEquipped = false)
+        public int SlotFor(IUnit host, bool hostIsEquipped)
         {
             if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
             {

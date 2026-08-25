@@ -94,7 +94,7 @@ export class SocketStatSynthesis {
    * them are left alone: a server-side producer records the mods the engine already assigned, and
    * synthesising on top would count them twice.
    */
-  contributions(host: Unit | null, hostIsEquipped = false): Map<number, number> {
+  contributions(host: Unit | null, hostIsEquipped: boolean): Map<number, number> {
     const merged = new Map<number, number>();
 
     if (
@@ -128,7 +128,7 @@ export class SocketStatSynthesis {
    * items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
    * (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
    */
-  slotFor(host: Unit | null, hostIsEquipped = false): number {
+  slotFor(host: Unit | null, hostIsEquipped: boolean): number {
     if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {
       return -1;
     }
@@ -175,7 +175,7 @@ export class SocketStatSynthesis {
    * read theirs. So a gem or rune contributes no span at all; a socketed JEWEL does, but from its
    * own affixes rather than from here.
    */
-  fillerProperties(host: Unit | null, hostIsEquipped = false): ItemProperty[] {
+  fillerProperties(host: Unit | null, hostIsEquipped: boolean): ItemProperty[] {
     const found: ItemProperty[] = [];
 
     if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {

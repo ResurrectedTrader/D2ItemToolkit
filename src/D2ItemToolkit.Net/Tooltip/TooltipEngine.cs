@@ -271,7 +271,9 @@ namespace D2ItemToolkit
         private Func<IReadOnlyList<int>, int, string> BuildSocketRangeAnnotation(
             IUnit host, TooltipOptions options)
         {
-            int slot = _socketStats.SlotFor(host);
+            // The socket bucket of a breakdown is what the fillers are worth, not what a recalc
+            // has currently left on the item.
+            int slot = _socketStats.SlotFor(host, false);
 
             var properties = new List<ItemProperty>();
             var byKey = new Dictionary<int, RolledStatRange>();
@@ -842,6 +844,146 @@ namespace D2ItemToolkit
                     item, ItemStatView.SetBonuses(false)), own));
         }
 
+
+        /// <summary>
+        /// What the item's stats ADD UP TO — its base array, its own affix / unique / setitems /
+        /// runeword nodes, what its socket fillers grant, and op 13 folded in. One entry per
+        /// (stat, layer), in the raw encoding the record carries.
+        ///
+        /// This is the question a stored item answers, and it is NOT the one
+        /// <see cref="Render"/> answers. A gem or rune arrives with an empty stat chain, so
+        /// without this a caller has no way to see that an Um grants the helm it sits in
+        /// `All Resistances +15`; and an item's own Defense is split across its base array and its
+        /// affixes with the total written down nowhere, so `31` reads 76 and 45 rather than 121.
+        ///
+        /// Set BONUSES are excluded by default — they belong to the wearer's other pieces rather
+        /// than to this item — and the worn-set filler discard is deliberately ignored; see
+        /// <see cref="ItemMergedStats.FillersIgnoredBecauseWorn"/>.
+        /// </summary>
+        /// <remarks>
+        /// Pass an ITEM. `IUnit.Items` carries two relations — socket fillers on an item, carried
+        /// gear on a wearer — and this reads it as the first, so handing it a PLAYER folds every
+        /// carried item in as though it were socketed.
+        /// </remarks>
+        public ItemMergedStats MergedStats(IUnit item, MergedStatsOptions options = null)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+
+            MergedStatsOptions opts = options ?? MergedStatsOptions.Default;
+
+            ItemStatView view = opts.IncludeSetBonuses
+                ? ItemStatView.Equipped()
+                : ItemStatView.ForSale();
+
+            // BOTH filler channels, because they are disjoint and each covers what the other
+            // cannot. The VIEW walks a filler's own captured stat lists, which is the only place a
+            // JEWEL's affixes live; Contributions synthesises from gems.txt and returns nothing for
+            // any filler that already carries stats, precisely so the two cannot double-count.
+            //
+            // Taking only the synthesis therefore counted a jewel ZERO times — and would have lost
+            // every gem and rune of a server-side capture, which records the mods the engine
+            // already assigned — while SocketFillerStats reported them, so the two entry points
+            // added in one change disagreed about the same filler.
+            view.IncludeSockets = opts.IncludeSockets;
+
+            SortedDictionary<int, int> merged = ItemStatReader.ReconstructView(item, view);
+            SortedDictionary<int, int> baseStats =
+                ItemStatReader.ReconstructView(item, ItemStatView.BaseOnly());
+
+            // hostIsEquipped FALSE on purpose. Render passes the item's real state here, which is
+            // what correctly gives a worn set piece none of its fillers; these totals answer what
+            // the item WOULD grant, so an item cannot drop out of a search because something
+            // equipped it.
+            var synthesised = new SortedDictionary<int, int>();
+            if (opts.IncludeSockets)
+            {
+                synthesised = _socketStats.Contributions(item, false);
+                AddInto(merged, synthesised);
+            }
+
+            // dropPercents false: `ac%` and the enhanced-damage pair are drawn as their own lines,
+            // so a caller indexing modifiers wants them beside the target they resolved onto.
+            ItemStatOps.Resolve(merged, baseStats, _data.ItemStatCost, false);
+
+            var stats = new List<MergedStat>();
+            var packed = new SortedSet<int>();
+
+            foreach (KeyValuePair<int, int> entry in merged)
+            {
+                int statId = ItemStatReader.StatFromKey(entry.Key);
+
+                if (RolledStatRange.IsPackedStat(statId))
+                {
+                    packed.Add(statId);
+                    continue;
+                }
+
+                if (entry.Value != 0)
+                {
+                    stats.Add(new MergedStat(
+                        statId, ItemStatReader.LayerFromKey(entry.Key), entry.Value));
+                }
+            }
+
+            // The last term is what the SYNTHESIS contributed, not merely that a filler exists.
+            // Only the synthesis is gated on the recalc discard — a jewel's stats arrive through
+            // the view, which Render does not gate either — so a socketed JEWEL makes the two views
+            // agree, and a flag raised on "has a filler" claimed a disagreement that was not there.
+            return new ItemMergedStats(
+                stats,
+                synthesised.Count != 0
+                    && SocketStatSynthesis.FillersAreDiscardedByRecalc(
+                        item, item.Location == LocationEquipped),
+                new List<int>(packed));
+        }
+
+        /// <summary>
+        /// What ONE filler grants the host it sits in, so a caller can store it against the filler
+        /// rather than only against the total. A gem or rune is synthesised from gems.txt keyed by
+        /// the host's `gemapplytype`, which is why the host is needed; a JEWEL carries its own
+        /// affixes instead and those are what come back.
+        ///
+        /// The slot is items.txt `gemapplytype`, and a row that takes no sockets at all still
+        /// reads 0 there — the weapon column — so a non-empty result is NOT evidence that the host
+        /// is socketable. 235 of the 659 rows with a usable gemapplytype have `gemsockets` 0.
+        /// Ask <see cref="Items"/> for `gemsockets` if that is the question. Empty only when the
+        /// row's gemapplytype is outside 0..2.
+        /// </summary>
+        public IReadOnlyList<MergedStat> SocketFillerStats(IUnit filler, IUnit host)
+        {
+            if (filler == null) throw new ArgumentNullException("filler");
+            if (host == null) throw new ArgumentNullException("host");
+
+            // Not the host's real equipped state, matching MergedStats: the question is what the
+            // filler contributes, not whether a recalc has currently thrown it away.
+            int slot = _socketStats.SlotFor(host, false);
+            if (slot < 0)
+            {
+                return new MergedStat[0];
+            }
+
+            SortedDictionary<int, int> contribution = _socketStats.Contribution(filler, slot);
+            if (contribution.Count == 0)
+            {
+                // A jewel's mods are captured on the jewel itself, so synthesising would count them
+                // twice; its own modifier view is what it contributes.
+                contribution = ItemStatReader.ReconstructView(filler, ItemStatView.Modifiers());
+            }
+
+            var stats = new List<MergedStat>();
+            foreach (KeyValuePair<int, int> entry in contribution)
+            {
+                int statId = ItemStatReader.StatFromKey(entry.Key);
+
+                if (!RolledStatRange.IsPackedStat(statId) && entry.Value != 0)
+                {
+                    stats.Add(new MergedStat(
+                        statId, ItemStatReader.LayerFromKey(entry.Key), entry.Value));
+                }
+            }
+
+            return stats;
+        }
         /// <summary>
         /// The span each of the item's stats could have rolled within, rebuilt from the tables its
         /// own record points at — the affix ids it stores, its UniqueItems or SetItems row, its
@@ -976,9 +1118,9 @@ namespace D2ItemToolkit
         /// </summary>
         private List<ItemProperty> AllSocketProperties(IUnit item)
         {
-            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item));
+            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item, false));
 
-            int slot = _socketStats.SlotFor(item);
+            int slot = _socketStats.SlotFor(item, false);
             if (slot < 0)
             {
                 return properties;
@@ -1026,7 +1168,7 @@ namespace D2ItemToolkit
             }
 
             // Same reason as in Compose: a captured gem or rune has no chain of its own.
-            AddInto(merged, _socketStats.Contributions(item));
+            AddInto(merged, _socketStats.Contributions(item, false));
 
             return merged;
         }

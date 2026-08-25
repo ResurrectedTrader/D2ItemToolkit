@@ -99,6 +99,15 @@ const StatChargedSkill = 204;
 const FirstByTime = 268;
 const LastByTime = 303;
 
+/**
+ * The same test as `RolledStatRange.isPackedEncoding`, for a bare stat id — so a caller deciding
+ * which stats may be summed reads the rule from here rather than deriving its own from `descFunc`.
+ * Two derivations of one fact drift; this is the owner.
+ */
+export function isPackedStat(statId: number): boolean {
+  return packedEncoding(statId);
+}
+
 function packedEncoding(statId: number): boolean {
   return statId === StatChargedSkill || (statId >= FirstByTime && statId <= LastByTime);
 }

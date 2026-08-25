@@ -150,6 +150,12 @@ namespace D2ItemToolkit.Tools
                         // earned-set fold sat outside the differential.
                         Engine.EarnedSetIdsOf(wearer))));
 
+                // The TOTALS surface, which shares nothing with the render path: it folds the
+                // gems.txt synthesis and op 13 into one merged view and deliberately IGNORES the
+                // worn-set discard, so none of that is reachable through the layers above.
+                payload.Append(", \"mergedStats\": ")
+                    .Append(PackMergedStats(Engine.MergedStats(record)));
+
                 // The two opt-in render modes, as text. Without these the annotation formatter, the
                 // range colour and the socket-block layout are all outside the differential —
                 // exercised only by hand-written tests on each side, which cannot catch the two
@@ -396,6 +402,24 @@ namespace D2ItemToolkit.Tools
             }
 
             return "[" + string.Join(", ", texts) + "]";
+        }
+
+        /// <summary>The merged-stat totals, flags included, so both engines agree on all of it.</summary>
+        private static string PackMergedStats(ItemMergedStats merged)
+        {
+            var stats = new List<string>();
+            foreach (MergedStat stat in merged.Stats)
+            {
+                stats.Add("{\"stat\": " + stat.StatId
+                    + ", \"layer\": " + stat.Layer
+                    + ", \"value\": " + stat.Value + "}");
+            }
+
+            return "{\"stats\": [" + string.Join(", ", stats)
+                + "], \"fillersIgnoredBecauseWorn\": "
+                + (merged.FillersIgnoredBecauseWorn ? "true" : "false")
+                + ", \"excludedPackedStats\": ["
+                + string.Join(", ", merged.ExcludedPackedStats) + "]}";
         }
 
         private static string PackRanges(ItemRollRanges ranges)

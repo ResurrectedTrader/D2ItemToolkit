@@ -33,6 +33,7 @@ export class ItemStatOps {
     merged: Map<number, number> | null | undefined,
     baseStats: ReadonlyMap<number, number> | null | undefined,
     table: IItemStatOpTable | null | undefined,
+    dropPercents = true,
   ): void {
     if (
       merged === null ||
@@ -69,7 +70,16 @@ export class ItemStatOps {
       );
     }
 
-    ItemStatOps.dropResolvedPercents(merged, table);
+    // The game does not STORE the percent on an item — 0x626821 tests `dwOwnerType == UNIT_ITEM`
+    // and clears the update flag, and 0x626847 then skips the store — and the render depends on
+    // that absence, which is what stops INV_FormatDurabilityText colouring a Superior weapon's max
+    // (see `dropResolvedPercents`).
+    //
+    // A merged-stat consumer wants it anyway: the tooltip draws `+150% Enhanced Defense` as its own
+    // line, so a caller indexing what an item grants has to be able to find it.
+    if (dropPercents) {
+      ItemStatOps.dropResolvedPercents(merged, table);
+    }
 
     if (added) {
       // The merged view is a SortedDictionary, so a target the merge never saw still lands in
