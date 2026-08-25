@@ -494,8 +494,7 @@ export function renderRecord(
     let maxLength = ItemTooltipComposer.MaxTooltipLength;
 
     if (kind === ItemTooltipKind.IdentifiedSetItem) {
-      // The generic composer still REFUSES a set item, and that refusal is behaviour worth
-      // comparing — it used to be the only thing this corpus recorded for one.
+      // The generic composer REFUSES a set item, and that refusal is behaviour worth comparing.
       payload.genericRefusal = refusal(composer, context, modifierStats);
 
       const builder = new SetItemTooltipBuilder(data, sets, items, types);

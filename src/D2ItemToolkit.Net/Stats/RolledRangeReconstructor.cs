@@ -395,9 +395,8 @@ namespace D2ItemToolkit
             }
 
             // The Defense line draws the OP-RESOLVED value, so its span has to be resolved too. A
-            // Large Shield rolling 12..14 under +150% Enhanced Defense prints 32 — a number that
-            // can never fall inside the 12..14 the base rolled within, which is what the span used
-            // to offer.
+            // Large Shield rolling 12..14 under +150% Enhanced Defense prints 32, which the
+            // unresolved 12..14 can never contain.
             ResolveBaseOps(lowStats, lowBase);
             ResolveBaseOps(highStats, highBase);
 

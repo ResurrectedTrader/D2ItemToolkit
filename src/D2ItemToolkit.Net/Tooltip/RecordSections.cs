@@ -822,9 +822,9 @@ namespace D2ItemToolkit
         /// (0x626821 tests dwOwnerType == UNIT_ITEM; 0x626847 then skips the write at 0x626868), so
         /// STATLIST_GetStatBonusFromLists reads 0 − 0 for them on any weapon.
         ///
-        /// An earlier version of this comment claimed the pre-seed was load-bearing for a Throwing
-        /// Knife whose +10% truncates to zero. It is not: the game leaves that line unmarked too.
-        /// The 159/160 halves are TARGETS rather than op rows, and those do still fire.
+        /// The pre-seed is NOT load-bearing for a Throwing Knife whose +10% truncates to zero -
+        /// the game leaves that line unmarked too. The 159/160 halves are TARGETS rather than op
+        /// rows, and those do still fire.
         /// </summary>
         private bool ThrowDamageIsModified(int minStat, int maxStat)
         {

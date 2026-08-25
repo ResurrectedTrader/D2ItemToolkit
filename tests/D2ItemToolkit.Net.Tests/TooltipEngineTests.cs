@@ -110,8 +110,8 @@ namespace D2ItemToolkit.Tests
 
             // Two markers on the block line, and that is the game: INV_FormatBlockChanceText
             // prepends colour 0 to its own label buffer (0x485d0e) and LoadItemDesc prepends the
-            // section's on top (0x48eb80). The composer used to swallow its own whenever the text
-            // already began with a marker, which lost one of the pair.
+            // section's on top (0x48eb80). Both survive: the composer must not swallow its own
+            // when the text already begins with a marker.
             Assert.Equal(
                 "ÿc3Vigorous Large Shield of Absorption\n"
                 + "ÿc0Defense: ÿc3300\n"
@@ -518,10 +518,10 @@ namespace D2ItemToolkit.Tests
 
             public int X { get { return 0; } }
 
-            // NOT empty, and NOT UnitSkill. ReadViewer used to iterate this as `foreach
-            // (UnitSkill ...)`, which compiles — foreach inserts a downcast — and threw
-            // InvalidCastException for any implementation that did not happen to use our class.
-            // An empty list here would have hidden that, so it carries a real skill.
+            // NOT empty, and NOT UnitSkill. Iterating this as `foreach (UnitSkill ...)` compiles
+            // — foreach inserts a downcast — and throws InvalidCastException for any
+            // implementation that does not happen to use our class. An empty list would hide that,
+            // so it carries a real skill.
             public IReadOnlyList<IUnitSkill> Skills
             {
                 get { return new IUnitSkill[] { new ComputedSkill(117, 20) }; }
@@ -796,9 +796,8 @@ namespace D2ItemToolkit.Tests
         public void An_explicit_null_member_means_the_same_as_an_absent_one()
         {
             // JsonConverter<T>.HandleNull is false for reference types, so `"code": null` bypasses
-            // every converter and used to land a null on the DTO — which the engine then
-            // dereferenced, turning a malformed document into a NullReferenceException from deep
-            // inside a writer. TypeScript coerced to defaults throughout; now both do.
+            // every converter, so a null can reach the DTO and be dereferenced deep inside a
+            // writer. Both implementations coerce to defaults instead.
             Unit unit = Unit.FromJson(
                 @"{ ""code"": null, ""playerName"": null, ""magicPrefix"": null,
                     ""magicSuffix"": null, ""statsLists"": null, ""stats"": null,
@@ -830,9 +829,8 @@ namespace D2ItemToolkit.Tests
         [Fact]
         public void Both_FromJson_overloads_agree_on_a_non_object_root()
         {
-            // The string overload used to throw where the JsonElement overload returned a default
-            // unit. tools/Reference happens to use the element overload, so the differential never
-            // saw it.
+            // The two overloads must agree. tools/Reference uses the element overload, so the
+            // differential cannot see a divergence here.
             foreach (string root in new[] { "5", "\"hi\"", "[]", "true", "null" })
             {
                 Unit fromString = Unit.FromJson(root);

@@ -144,13 +144,15 @@ but every one of its fields is required, so `createUnit` is the practical way in
 
 ```
 IUnit (item) ──────┐
-                   ├── TooltipEngine ──┬── Render          → the tooltip
-IUnit (viewer) ────┘                   ├── Breakdown       → where each modifier came from
-    optional                           ├── Ranges          → what each stat could have rolled
-                                       ├── RangesForViewer → the same, plus the viewer's set tiers
-                                       ├── Appearance      → inventory sprite and palette shift
-                                       ├── Requirements    → strength / dexterity / level / class
-                                       └── ClassIdsOfType  → every classId under a type code
+                   ├── TooltipEngine ──┬── Render            → the tooltip
+IUnit (viewer) ────┘                   ├── Breakdown         → where each modifier came from
+    optional                           ├── Ranges            → what each stat could have rolled
+                                       ├── RangesForViewer   → the same, plus the viewer's set tiers
+                                       ├── MergedStats       → what the stats add up to
+                                       ├── SocketFillerStats → what one gem or rune grants its host
+                                       ├── Appearance        → inventory sprite and palette shift
+                                       ├── Requirements      → strength / dexterity / level / class
+                                       └── ClassIdsOfType    → every classId under a type code
 ```
 
 It also exposes the parsed game tables — see [Reading the tables](#reading-the-tables). The section
@@ -203,21 +205,22 @@ the game** deliberately do not, and none of them changes the output unless you s
 |---|---|---|
 | `Difficulty` | `0` | `GetDificulity()`. Only a quest item with `questdiffcheck` reads it |
 | `ShopMode` | `0` | 0 outside a shop. Any non-zero value suppresses both usage lines; 1–9 also admit the transaction-cost line, which only the set-item path fills today (see the gap below) |
-| `QuestColorPrefix` | `false` | Appends the trailing quest-colour marker |
 | `ClientPlayer` | `null` | The character, when the viewer is a **mercenary** — see below |
-| `IncludeSockets` | `true` | *Beyond the game.* False renders the base item as if nothing were socketed in it |
-| `ShowRolledRanges` | `false` | *Beyond the game.* Writes each stat's roll span inline |
-| `RangeAnnotation` | `null` | How a span is written. Null uses the built-in format |
-| `RangeColor` | grey (5) | Paints the annotation its own colour. Grey by default so a span reads as an annotation rather than as part of the line; -1 inherits the line's |
-| `SeparateSocketContributions` | `false` | *Beyond the game.* Moves each filler's mods into its own block below the item |
+| `Sockets` | `Merged` | *`Excluded` and `Separated` go beyond the game.* What the render does with the socket fillers |
+| `Ranges` | `null` | *Beyond the game.* Non-null writes each stat's roll span inline. `Format` chooses the wording, `Color` the colour (grey by default, so a span reads as an annotation rather than as part of the line; -1 inherits the line's) |
+| `ApplyWornSetDiscard` | `true` | *False goes beyond the game.* Renders a worn set piece as though its fillers still applied — see below |
+
+`Sockets` is one value rather than several booleans because the alternatives are mutually
+exclusive: `Merged` is what the game draws, `Excluded` renders the item as if nothing were socketed
+in it, and `Separated` moves each filler's mods into its own block below the item.
 
 ```csharp
 var options = new TooltipOptions();
-options.ShopMode = 1;                          // 1-9 mark a shop context (see the gap below)
-options.ShowRolledRanges = true;               // "+175% Enhanced Damage [150-200]"
-options.RangeColor = ItemTooltipColor.White;   // override the grey default
-options.SeparateSocketContributions = true;    // one block per gem, below the item
-options.ClientPlayer = character;              // see below
+options.ShopMode = 1;                              // 1-9 mark a shop context (see the gap below)
+options.Sockets = SocketMode.Separated;            // one block per gem, below the item
+options.Ranges = new RangeDisplay();               // "+175% Enhanced Damage [150-200]"
+options.Ranges.Color = ItemTooltipColor.White;     // override the grey default
+options.ClientPlayer = character;                  // see below
 ```
 
 `ClientPlayer` exists for exactly one case: a **mercenary's** panel. Requirements, class
@@ -225,17 +228,17 @@ restriction, block chance and the smite gate all use the viewer — who is the m
 speed line is timed against the *character*. If you are rendering a merc's equipment, set this to
 the player. Leave it null everywhere else.
 
-The TypeScript names are the same in camelCase — `showRolledRanges`, `rangeColor`,
-`separateSocketContributions` — and it is a plain object literal, so you only pass what you set.
+The TypeScript names are the same in camelCase, and it is a plain object literal, so you only pass
+what you set: `{ sockets: 'separated', ranges: { color: 0 } }`.
 
 ### Separating the sockets
 
 The game merges a filler's mods into the item's own block, so you cannot tell which gem did what.
-`SeparateSocketContributions` moves them out — the item shows only its own, and each filler gets a
+`Sockets = Separated` moves them out — the item shows only its own, and each filler gets a
 block below headed by its name:
 
 ```
-merged (what the game draws)          SeparateSocketContributions
+merged (what the game draws)          Sockets = Separated
 ────────────────────────────          ───────────────────────────
 Gemmed Crystal Sword                  Crystal Sword
 One-Hand Damage: 6 to 18              One-Hand Damage: 5 to 15
@@ -257,7 +260,7 @@ The blocks carry `ItemTooltipSection.SocketContribution` and are separated by a 
 gems do not read as one list. Nothing is dropped — the fillers are moved, which is why the item's
 own damage line drops back to its unsocketed value.
 
-Combined with `ShowRolledRanges`, a **jewel** is ranged from its own affixes, which is the case that
+Combined with a non-null `Ranges`, a **jewel** is ranged from its own affixes, which is the case that
 actually rolls. A gem or rune shows no span, and that is correct rather than missing: no gems.txt
 cell rolls at all. The three whose min differs from their max — `dmg-fire`, `dmg-ltng` and
 `dmg-cold` on Ral, Ort and Thul — are the two fixed *ends* of a damage range, not a roll.
@@ -281,9 +284,9 @@ For the shield above with a **Perfect Ruby** socketed:
 | `b.SetBonuses` | *(none)* |
 
 `Render` merges those into one `Fire Resist +65%`, because that is what the game does.
-`IncludeSockets = false` gives `Fire Resist +25%` instead.
+`Sockets = SocketMode.Excluded` gives `Fire Resist +25%` instead.
 
-`Breakdown` takes the same `TooltipOptions`, so `ShowRolledRanges` annotates each bucket with the
+`Breakdown` takes the same `TooltipOptions`, so a non-null `Ranges` annotates each bucket with the
 span that matches ITS numbers — the item's own for `Base`, `Magic` and `SetBonuses`, the fillers'
 for `Sockets`. See [Ranges](#ranges--what-each-stat-could-have-rolled).
 
@@ -321,7 +324,7 @@ together, `+2 to All Attributes` stands for four. Those carry `line.Aggregated` 
 int[] stats = line.ShownStats ?? new[] { line.StatId };
 ```
 
-Range annotation is written into `line.Text` as each line is built, so `ShowRolledRanges` output
+Range annotation is written into `line.Text` as each line is built, so the annotated output
 survives rendering from `Lines` — you do not have to go through `Text` or `ColoredText` to get it.
 
 **A span always matches the number beside it.** That is the rule the three views follow, and it is
@@ -331,17 +334,17 @@ Fire Resist 5–10:
 | view | line | span | why |
 |---|---|---|---|
 | `Render` (default) | `Fire Resist +28%` | `[16-30]` | one line holding the SUM, so the span sums both: 11+5 to 20+10 |
-| `Render` + `SeparateSocketContributions` | `Fire Resist +20%` | `[11-20]` | the fillers are moved out, so the line and its span are the item's own |
+| `Render` + `Sockets = Separated` | `Fire Resist +20%` | `[11-20]` | the fillers are moved out, so the line and its span are the item's own |
 | " " (the jewel's block) | `Fire Resist +8%` | `[5-10]` | the jewel's own affix roll |
 | `Breakdown.Magic` | `Fire Resist +20%` | `[11-20]` | the item's own mods, sockets excluded |
 | `Breakdown.Sockets` | `Fire Resist +8%` | `[5-10]` | what the fillers add |
 
-Ranges work in **both** `Render` and `Breakdown` — pass the same `ShowRolledRanges` either way.
+Ranges work in **both** `Render` and `Breakdown` — pass the same `Ranges` either way.
 
 If you just want it written inline, set the flag:
 
 ```csharp
-var options = new TooltipOptions { ShowRolledRanges = true };
+var options = new TooltipOptions { Ranges = new RangeDisplay() };
 
 foreach (ItemTooltipLine line in TooltipEngine.Embedded.Render(item, player, options).Lines)
 {
@@ -368,10 +371,10 @@ Adds 1-4 cold damage [(1-2)-(3-5)]      the first number rolled 1-2, the second 
 +2 to all Attributes                    four stats sharing one number, all fixed — nothing to say
 ```
 
-`RangeColor` paints the spans distinctly. The annotation is wrapped in a colour marker and a second
+`Ranges.Color` paints the spans distinctly. The annotation is wrapped in a colour marker and a second
 one restoring the line's own, so nothing after it is repainted and the following line is unaffected.
 
-The format is yours — `RangeAnnotation` receives one `RolledStatRange` per STAT the line shows, in
+The format is yours — `Ranges.Format` receives one `RolledStatRange` per STAT the line shows, in
 print order, and returning null or an empty string suppresses the annotation, which is how you show
 ranges for some stats and not others. Stats shown, not numbers printed: the `+2 to all Attributes`
 line above prints one number and hands the callback four ranges, which is why the built-in format
@@ -438,6 +441,79 @@ name the wrong one.
 **Caveat:** as with `Breakdown`, the game never computes this, so it has no ground truth to be
 checked against. What it is checked against is the tables' own min/max columns, the item's own
 recorded values, and the other implementation over every corpus case.
+
+### MergedStats — what the stats add up to
+
+`Render` answers "what does the game draw". `MergedStats` answers "what does this item give", which
+is the question a stored item has to answer — and the raw statlists cannot, for three reasons:
+
+- **A gem or rune carries no stats at all.** Its mods live in gems.txt keyed by the host's type, so
+  an Um in a helm contributes `All Resistances +15` that appears nowhere in the record.
+- **An item's own stats are split across its lists.** A Tal Rasha's Horadric Crest holds `31 = 76`
+  on the base array and `31 = 45` on the affix list. The tooltip prints `Defense: 121`; nothing in
+  the chain holds 121.
+- **Op 13 is unapplied.** `+120% Enhanced Defense` and the base Defense are separate stats until the
+  op resolves them.
+
+```csharp
+ItemMergedStats merged = TooltipEngine.Embedded.MergedStats(item);
+
+foreach (MergedStat stat in merged.Stats)
+{
+    Console.WriteLine($"stat {stat.StatId} layer {stat.Layer} = {stat.Value}");
+}
+```
+
+| member | what it gives you |
+|---|---|
+| `Stats` | one entry per non-zero `(StatId, Layer)`, ordered by LAYER then stat |
+| `FillersIgnoredBecauseWorn` | true when these totals deliberately differ from `Render` — see below |
+| `ExcludedPackedStats` | stat ids left out because their value is a packed encoding |
+
+Values are **raw**, in the encoding the record carries: `+60 to Life` comes back as `60 << 8`,
+pre-`nValShift`. That is deliberate — a consumer's search bounds derive from the same itemstatcost
+scale, and a display-scaled value would need a second scale beside it.
+
+An op-13 **percent survives** beside the target it resolved onto: you get both `item_armor_percent`
+and the Defense it contributed to, because the tooltip draws the percent as its own line. Summing
+both would double count.
+
+**Packed encodings are excluded rather than summed** — stat 204 packs `(maxCharges << 8) + current`,
+and the by-time stats pack a triple. Adding two packed words produces a number that looks real and
+is not. They are reported in `ExcludedPackedStats` and are *absent* from `Stats` rather than zero,
+because a zero would satisfy every "at most N" bound. `RolledStatRange.IsPackedStat(statId)` is the
+same test, so a caller need not derive its own.
+
+Set **bonuses** are excluded by default, the same rule `Ranges` follows; `IncludeSetBonuses` folds
+in the tiers the record already carries. Pass an **item**, not a wearer: `IUnit.Items` carries two
+relations, and this reads it as socket fillers.
+
+#### Where it deliberately disagrees with Render
+
+An equipped **set** piece is the one case. `ITEM_RecalcAllEquippedItems` detaches a worn set item's
+stat list and rebuilds it without re-applying the fillers, so the game really does grant a worn Tal
+Rasha's Horadric Crest with an Um in it `All Resistances +15` rather than 30 — and `Render`
+reproduces that.
+
+`MergedStats` ignores the discard, because the useful question about a stored item is what it
+*would* give: an item must not drop out of a search because something equipped it. When the two
+views disagree, `FillersIgnoredBecauseWorn` says so, so a caller can flag it rather than look wrong.
+If you want the render to agree, set `ApplyWornSetDiscard = false`.
+
+### SocketFillerStats — one filler's contribution
+
+What a single gem, rune or jewel grants the host it sits in, so a caller can attribute stats to the
+socket rather than only to the total.
+
+```csharp
+IReadOnlyList<MergedStat> um = TooltipEngine.Embedded.SocketFillerStats(filler, host);
+```
+
+The host matters: an Um is `All Resistances +22` in a shield and `+15` in a helm, and the difference
+is gems.txt `gemapplytype`. A **jewel** carries its own affixes instead, and those are what come
+back. Note the slot comes from `gemapplytype`, and a row that takes no sockets still reads 0 there,
+so a non-empty result is not evidence that the host is socketable — ask `Items` for `gemsockets` if
+that is the question.
 
 ### Appearance — drawing the item in a grid
 
@@ -619,9 +695,9 @@ traced to the instruction that causes it, and the code cites the address.
 
 | | |
 |---|---|
-| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **935** |
+| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **939** |
 | hostile producer-legal inputs, both engines agreeing | **11,972** |
-| tests | **1041** C# / **1057** TypeScript |
+| tests | **1066** C# / **1082** TypeScript |
 | captured client tooltips reproduced byte-identically | **64 / 64** |
 
 The capture set is a private `captures.db` of real client tooltips and is not part of this

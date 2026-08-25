@@ -145,8 +145,8 @@ describe('AttackSpeedCalculator', () => {
   it('a speed 27 weapon with no player class lands on bucket zero', () => {
     // With no player unit the class index is -1 (0x486274), so dword_722078[2*-1] reads
     // dword_721F10's last dword — a 5. 5*(27-10)+5 = 90 then indexes ONE PAST that table,
-    // onto dword_722078[0] = 0, and word_721E88[0] is locale 4088. The C# used to throw
-    // here; a non-player viewer is a legal call even though the game never makes it.
+    // onto dword_722078[0] = 0, and word_721E88[0] is locale 4088. A non-player viewer is a legal
+    // call here even though the game never makes it, so this must not throw.
     //
     // The animation is the MONSTER one now, so the tuning stat is against "IWSC1hs" — the Act 3
     // mercenary, the one hireling whose mode-7 name resolves at all.
@@ -182,7 +182,7 @@ describe('AttackSpeedCalculator', () => {
   });
 
   it("a mercenary's ogre axe still writes the line", () => {
-    // The reported symptom: this used to be null, because the name was built from
+    // The reported symptom is a null line, because the name was built from
     // PlrType[classId] and no PlrType row 338 exists.
     //
     // "GUSChth" is not in AnimData.D2 — the Act 2 mercenary has no cast animation — so

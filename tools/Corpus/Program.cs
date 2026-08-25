@@ -392,8 +392,7 @@ namespace D2ItemToolkit.Tools
         }
 
         /// <summary>
-        /// ITEM_BuildSetItemTooltip 0x48d1d0. Nothing else in the corpus reaches it — every other
-        /// quality-5 case used to record a NotSupportedException and stop there — so the branches
+        /// ITEM_BuildSetItemTooltip 0x48d1d0. Nothing else in the corpus reaches it, so the branches
         /// have to be laid out deliberately: each `add func`, an empty and a full piece list, both
         /// bonus blocks present and absent, the shop tail, and the two type gates that make this
         /// writer emit LESS than the generic one.

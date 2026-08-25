@@ -190,7 +190,7 @@ namespace D2ItemToolkit.Tools
                 if (kind == ItemTooltipKind.IdentifiedSetItem)
                 {
                     // The generic composer still REFUSES a set item, and that refusal is behaviour
-                    // worth comparing — it used to be the only thing this corpus recorded for one.
+                    // worth comparing.
                     payload.Append(", \"genericRefusal\": ")
                         .Append(Quote(Refusal(composer, context, modifierStats)));
 

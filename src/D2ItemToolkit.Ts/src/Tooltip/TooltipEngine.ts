@@ -173,8 +173,8 @@ export interface TooltipOptions {
    * worn mask that lights the bonus tiers, and the piece list's colours, because those are facts
    * about the wearer rather than about the sockets.
    *
-   * Like `separateSocketContributions` and `showRolledRanges`, false is a deliberate departure from
-   * what the game draws.
+   * Like `sockets: 'separated'` and a non-null `ranges`, false is a deliberate departure from what
+   * the game draws.
    */
   applyWornSetDiscard?: boolean;
 
@@ -460,11 +460,10 @@ export class TooltipEngine {
     // what includeSockets false already does — they are moved, not dropped.
     const includeSockets = (options.sockets ?? 'merged') === 'merged';
 
-    // Derived from the viewer rather than defaulted to "none". The old default painted every piece
-    // red and selected no tier, and — because the full-set block is gated on isEquipped — silently
-    // suppressed it for anyone actually wearing the set. A viewer that carries nothing still yields
-    // exactly that empty input, and a non-set item exits setStateOf after the location test, so
-    // this costs nothing on the common path.
+    // Derived from the viewer, never defaulted: an empty input paints every piece red, selects no
+    // tier, and suppresses the full-set block, which is gated on isEquipped. A viewer that carries
+    // nothing still yields exactly that empty input, and a non-set item exits setStateOf after the
+    // location test, so this costs nothing on the common path.
     const set = this.setStateOf(item, viewer);
 
     // FILLER discard only. `set` keeps the real equipped state, because that is what the full-set

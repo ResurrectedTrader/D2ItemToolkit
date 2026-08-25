@@ -315,7 +315,7 @@ describe('set state derived from the viewer', () => {
 
 describe('what the derivation changes about the rendered tooltip', () => {
   it('colours owned pieces differently from the rest', () => {
-    // The payoff: render alone used to pass an empty input, so every sibling painted red.
+    // The payoff: render derives the state rather than passing an empty input, so every sibling painted red.
     const halo = piece(AngelicHalo, LocationEquipped, 6);
     const player = wearer(halo, piece(AngelicMantle, LocationEquipped, BodyTorso));
 
@@ -330,7 +330,7 @@ describe('what the derivation changes about the rendered tooltip', () => {
     expect(pieces.filter(l => l.color === ItemTooltipColor.Set).length).toBe(2);
     expect(pieces.filter(l => l.color === ItemTooltipColor.Red).length).toBe(2);
 
-    // With no wearer at all every piece is unowned, which is what the old default gave everyone.
+    // With no wearer at all every piece is unowned.
     const alone = Engine.render(halo).lines.filter(
       l => l.section === ItemTooltipSection.SetPieceList && l.color === ItemTooltipColor.Red,
     );

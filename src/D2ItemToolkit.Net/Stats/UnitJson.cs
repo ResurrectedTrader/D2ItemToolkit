@@ -26,8 +26,8 @@ namespace D2ItemToolkit
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
 
             // The document carries fields we do not model — a wearer's `name`, the manager's
-            // rendering hints. An item's grid position no longer belongs on that list: it is
-            // modelled as Location and X. Strictness about VALUES is worth having; strictness about
+            // rendering hints. An item's grid position is NOT among them: it is modelled as
+            // Location and X. Strictness about VALUES is worth having; strictness about
             // unknown MEMBERS would reject every real capture.
             //
             // Note this is the default, and is stated only because the opposite would break the

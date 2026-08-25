@@ -859,8 +859,7 @@ namespace D2ItemToolkit
             return _typeNames[monsterTypeId];
         }
 
-        // TXT_MonStats_GetLine does a plain range check, so this is one. It used to consult a
-        // bool[] that was set true for every row in range, which held no information.
+        // TXT_MonStats_GetLine does a plain range check, so this is one.
         public bool MonsterExists(int monsterId)
         {
             return monsterId >= 0 && monsterId < _monsterNames.Length;

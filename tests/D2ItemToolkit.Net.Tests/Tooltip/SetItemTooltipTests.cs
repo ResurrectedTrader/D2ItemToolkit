@@ -625,8 +625,7 @@ namespace D2ItemToolkit.Tests
         }
 
         /// <summary>
-        /// Render classifies and routes on its own, so a set item is no longer refused — the four
-        /// of sixty-two that used to throw now draw.
+        /// Render classifies and routes on its own, so a set item is drawn rather than refused.
         /// </summary>
         [Fact]
         public void Render_routes_a_set_item_to_the_set_writer()

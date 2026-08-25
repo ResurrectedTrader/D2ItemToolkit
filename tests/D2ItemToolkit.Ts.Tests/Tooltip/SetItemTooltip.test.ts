@@ -659,8 +659,7 @@ describe('the set-item writer', () => {
   });
 
   /**
-   * render classifies and routes on its own, so a set item is no longer refused — the four of
-   * sixty-two that used to throw now draw.
+   * render classifies and routes on its own, so a set item is drawn rather than refused.
    */
   it('routes a set item through render', () => {
     const tooltip = TooltipEngine.embedded.render(angelicHaloRecord(0x40), playerRecord(30));

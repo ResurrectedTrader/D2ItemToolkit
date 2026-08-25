@@ -7,10 +7,9 @@ namespace D2ItemToolkit
     /// The way in. Holds the parsed game tables — building them is the expensive part, so make one
     /// and keep it. Rendering is read-only and safe to share between threads.
     ///
-    /// Not quite "immutable once constructed", which this used to claim: constructing the per-render
-    /// helpers installs a property-code resolver on the shared gem and set tables. The value written
-    /// is functionally the same every time and a reference store is atomic, so concurrent renders
-    /// stay correct — but it is a write, and the accurate statement is the one above.
+    /// Not quite immutable once constructed: building the per-render helpers installs a
+    /// property-code resolver on the shared gem and set tables. The value written is functionally
+    /// the same every time and a reference store is atomic, so concurrent renders stay correct.
     /// </summary>
     public sealed class TooltipEngine
     {
@@ -124,11 +123,10 @@ namespace D2ItemToolkit
             // exactly what IncludeSockets false already does — they are moved, not dropped.
             bool includeSockets = opts.Sockets == SocketMode.Merged;
 
-            // Derived from the viewer rather than defaulted to "none". The old default painted
-            // every piece red and selected no tier, and — because the full-set block is gated on
-            // IsEquipped — silently suppressed it for anyone actually wearing the set. A viewer
-            // that carries nothing still yields exactly that empty input, and a non-set item exits
-            // SetStateOf after the Location test, so this costs nothing on the common path.
+            // Derived from the viewer, never defaulted: an empty input paints every piece red,
+            // selects no tier, and suppresses the full-set block, which is gated on IsEquipped. A
+            // viewer that carries nothing still yields exactly that empty input, and a non-set item
+            // exits SetStateOf after the Location test, so this costs nothing on the common path.
             SetItemTooltipInput set = SetStateOf(item, viewer);
 
             // FILLER discard only. `set` keeps the real equipped state, because that is what the

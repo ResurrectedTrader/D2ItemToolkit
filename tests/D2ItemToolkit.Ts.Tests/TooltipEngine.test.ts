@@ -106,8 +106,8 @@ describe('the facade', () => {
 
     // Two markers on the block line, and that is the game: INV_FormatBlockChanceText prepends
     // colour 0 to its own label buffer (0x485d0e) and LoadItemDesc prepends the section's on top
-    // (0x48eb80). The composer used to swallow its own whenever the text already began with a
-    // marker, which lost one of the pair.
+    // (0x48eb80). Both survive: the composer must not swallow its own when
+    // the text already begins with a marker.
     expect(tip.coloredText).toBe(
       'ÿc3Vigorous Large Shield of Absorption\n' +
         'ÿc0Defense: ÿc3300\n' +
@@ -551,8 +551,8 @@ describe('parity with the C# engine', () => {
   });
 
   it('treats null options as the defaults', () => {
-    // A default parameter only fires for `undefined`, so an explicit null used to fall through
-    // to a field access and throw where C# accepted it.
+    // A default parameter only fires for `undefined`, so an explicit null would otherwise fall
+    // through to a field access and throw where C# accepts it.
     expect(TooltipEngine.embedded.render(item(), player(), null).text).toBe(
       TooltipEngine.embedded.render(item(), player()).text,
     );

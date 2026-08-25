@@ -32,9 +32,9 @@ namespace D2ItemToolkit
         }
 
         /// <summary>
-        /// Both halves of a packed key. Not a Try- method: every 32-bit key unpacks, so the bool it
-        /// used to return was always true and its caller carried a disjunct that could never fire.
-        /// The TypeScript peer returns { layer, stat } for the same reason.
+        /// Both halves of a packed key. Not a Try- method: every 32-bit key unpacks, so a success
+        /// bool would always be true. The TypeScript peer returns { layer, stat } for the same
+        /// reason.
         /// </summary>
         public static void UnpackStatKey(int key, out int layer, out int stat)
         {

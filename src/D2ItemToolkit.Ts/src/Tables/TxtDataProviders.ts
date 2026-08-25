@@ -774,8 +774,7 @@ export class TxtMonsterTypeTable implements IMonsterTypeTable {
     return this._typeNames[monsterTypeId] ?? null;
   }
 
-  // TXT_MonStats_GetLine does a plain range check, so this is one. It used to consult a boolean[]
-  // that was set true for every row in range, which held no information.
+  // TXT_MonStats_GetLine does a plain range check, so this is one.
   monsterExists(monsterId: number): boolean {
     return monsterId >= 0 && monsterId < this._monsterNames.length;
   }

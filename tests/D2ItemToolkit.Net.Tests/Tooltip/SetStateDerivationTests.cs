@@ -333,7 +333,7 @@ namespace D2ItemToolkit.Tests
         [Fact]
         public void The_piece_list_colours_owned_pieces_differently_from_the_rest()
         {
-            // The payoff: Render alone used to pass an empty input, so every sibling painted red.
+            // The payoff: Render derives the state rather than passing an empty input, so every sibling painted red.
             Unit halo = Piece(AngelicHalo, LocationEquipped, 6);
             Unit wearer = Wearer(halo, Piece(AngelicMantle, LocationEquipped, BodyTorso));
 
@@ -348,8 +348,7 @@ namespace D2ItemToolkit.Tests
             Assert.Equal(2, pieces.Count(l => l.Color == ItemTooltipColor.Set));
             Assert.Equal(2, pieces.Count(l => l.Color == ItemTooltipColor.Red));
 
-            // With no wearer at all every piece is unowned, which is what the old default gave for
-            // everyone.
+            // With no wearer at all every piece is unowned.
             Assert.Equal(
                 4,
                 Engine.Render(halo).Lines

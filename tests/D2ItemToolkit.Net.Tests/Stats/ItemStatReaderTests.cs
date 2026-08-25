@@ -485,9 +485,8 @@ namespace D2ItemToolkit.Tests
         }
 
         // =================================================================
-        // Malformed documents throw. These three used to assert the opposite — the hand-written
-        // reader fell back to 0 on any cell it could not read, because it was built on
-        // JsonElement's TryGet* pair. That was a property of the reader, not a decision: a `flags`
+        // Malformed documents throw rather than falling back to 0 on any cell that cannot be
+        // read. Silence there is not a decision but a property of a TryGet*-based reader: a `flags`
         // cell silently reading 0 loses STATLIST_EXTENDED and MAGIC, so the whole node stops
         // contributing and the tooltip renders short with nothing to say why. Deserialising
         // through System.Text.Json throws instead, which is the failure this project wants.
