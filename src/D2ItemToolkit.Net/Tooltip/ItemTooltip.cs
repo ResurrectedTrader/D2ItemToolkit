@@ -87,7 +87,7 @@ namespace D2ItemToolkit
 
         /// <summary>
         /// Not a section the game has. One block per socket filler, emitted below the item when
-        /// <see cref="TooltipOptions.SeparateSocketContributions"/> is set, so a reader can tell
+        /// <see cref="TooltipOptions.Sockets"/> is <see cref="SocketMode.Separated"/>, so a reader can tell
         /// what each gem or rune is actually contributing. Never produced otherwise.
         /// </summary>
         SocketContribution = 28,

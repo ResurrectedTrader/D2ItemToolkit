@@ -5,7 +5,11 @@ import { createUnit, type Unit } from '../../../src/D2ItemToolkit.Ts/src/Stats/U
 import type { ItemMergedStats } from '../../../src/D2ItemToolkit.Ts/src/Stats/MergedStats.js';
 import { ItemTable } from '../../../src/D2ItemToolkit.Ts/src/Tables/ItemTable.js';
 import { D2DataFiles } from '../../../src/D2ItemToolkit.Ts/src/Tables/TxtDataProviders.js';
-import { TooltipEngine } from '../../../src/D2ItemToolkit.Ts/src/Tooltip/TooltipEngine.js';
+import {
+  TooltipEngine,
+  type Tooltip,
+} from '../../../src/D2ItemToolkit.Ts/src/Tooltip/TooltipEngine.js';
+import { ItemTooltipSection } from '../../../src/D2ItemToolkit.Ts/src/Tooltip/ItemTooltip.js';
 
 /**
  * The peer of the C# MergedStatsTests: the three things a stored item cannot answer from its raw
@@ -35,6 +39,13 @@ const TalRashasHoradricCrest = 80;
 
 /** UniqueItems.txt post-splice, 0-based. `xea`, a Serpentskin Armor. */
 const SkinOfTheVipermagi = 210;
+
+function sectionOf(tip: Tooltip, section: ItemTooltipSection): string[] {
+  return tip.lines
+    .filter(l => l.section === section)
+    .map(l => (l.text ?? '').replace(/ÿc./g, '').replace(/\n+$/, ''))
+    .filter(t => t.length !== 0);
+}
 
 function valueOf(merged: ItemMergedStats, statId: number, layer = 0): number {
   return merged.stats.find(s => s.statId === statId && s.layer === layer)?.value ?? 0;
@@ -381,5 +392,56 @@ describe('merged item stats', () => {
 
     const inShield = Engine.socketFillerStats(crest.items[0] as Unit, shield);
     expect(inShield.find(s => s.statId === StatFireResist)?.value).toBe(22);
+  });
+  it('applyWornSetDiscard off restores the fillers and nothing else', () => {
+    // The option that replaces faking `location`. Off, a worn set piece renders as though its
+    // fillers still applied — and ONLY that changes, which is the whole point: `location` also
+    // decides the worn mask, the piece colours and the full-set block.
+    const worn = crestWithUm(LocationEquipped);
+    const asPotential = { applyWornSetDiscard: false };
+
+    // The Crest grants res-all 15 of its OWN and an Um grants a helm another 15, so the two are
+    // indistinguishable by presence — only the NUMBER says whether the rune counted.
+    expect(sectionOf(Engine.render(worn), ItemTooltipSection.Modifiers)).toContain(
+      'All Resistances +15',
+    );
+    expect(
+      sectionOf(Engine.render(worn, null, asPotential), ItemTooltipSection.Modifiers),
+    ).toContain('All Resistances +30');
+
+    // The piece is still EQUIPPED for every other purpose. Faking location would have moved these.
+    for (const section of [
+      ItemTooltipSection.SetPieceList,
+      ItemTooltipSection.PartialSetBonus,
+      ItemTooltipSection.FullSetBonus,
+    ]) {
+      expect(sectionOf(Engine.render(worn, null, asPotential), section)).toEqual(
+        sectionOf(Engine.render(worn), section),
+      );
+    }
+  });
+
+  it('applyWornSetDiscard changes nothing when the discard does not apply', () => {
+    // Not worn, so there is no discard to switch off and the option is inert. This is what stops it
+    // becoming a general "ignore sockets" knob by accident.
+    const carried = crestWithUm(LocationStash);
+
+    expect(Engine.render(carried, null, { applyWornSetDiscard: false }).text).toBe(
+      Engine.render(carried).text,
+    );
+  });
+
+  it('applyWornSetDiscard off agrees with mergedStats', () => {
+    // The two surfaces answer the same question once the render is told to. Before the option, the
+    // only way to line them up was to falsify the record.
+    const worn = crestWithUm(LocationEquipped);
+
+    expect(
+      sectionOf(
+        Engine.render(worn, null, { applyWornSetDiscard: false }),
+        ItemTooltipSection.Modifiers,
+      ),
+    ).toContain('All Resistances +30');
+    expect(valueOf(Engine.mergedStats(worn), StatFireResist)).toBe(30);
   });
 });

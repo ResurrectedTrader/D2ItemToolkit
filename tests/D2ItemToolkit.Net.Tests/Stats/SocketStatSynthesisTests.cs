@@ -177,7 +177,7 @@ namespace D2ItemToolkit.Tests
         public void Excluding_sockets_excludes_the_synthesised_stats_too()
         {
             var options = new TooltipOptions();
-            options.IncludeSockets = false;
+            options.Sockets = SocketMode.Excluded;
 
             string text = TooltipEngine.Embedded.Render(
                 Host("urg", "r18", "r18", "r23"), null, options).Text;

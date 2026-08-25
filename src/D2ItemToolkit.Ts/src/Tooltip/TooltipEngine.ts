@@ -102,6 +102,34 @@ function onAnOwningPage(location: number): boolean {
   return location !== Ground && location !== Store && location !== Trade;
 }
 
+/**
+ * What a render does with the item's socket fillers.
+ *
+ * `merged` is what the game draws. `excluded` renders the item as if nothing were socketed, so a
+ * caller can show what the base is worth on its own. `separated` moves the fillers into one block
+ * each below the item, carrying `ItemTooltipSection.SocketContribution`; the game draws neither.
+ */
+export type SocketMode = 'merged' | 'excluded' | 'separated';
+
+/**
+ * Turns on the rolled-range annotation and carries how it is written. Null or absent — the default
+ * — leaves it off, which is what keeps an ordinary render byte-identical to the game.
+ */
+export interface RangeDisplay {
+  /**
+   * How a span is written. Absent uses `defaultRangeAnnotation`, which gives ` [5-15]`. Return null
+   * or empty to suppress ONE span, which is how you show ranges for some stats and not others.
+   */
+  format?: (ranges: readonly RolledStatRange[]) => string | null;
+
+  /**
+   * The `ItemTooltipColor` to paint it, or -1 to inherit the line's. Defaults to the game's grey
+   * rather than -1: a range is an annotation the game never draws, and inheriting the stat line's
+   * blue made it read as part of the line.
+   */
+  color?: number;
+}
+
 /** Per-render knobs. Everything else is unit state and comes off the record. */
 export interface TooltipOptions {
   /**
@@ -117,58 +145,38 @@ export interface TooltipOptions {
   shopMode?: number;
 
   /**
-   * False renders the item as if nothing were socketed in it. The game has no such mode; this
-   * exists so a caller can show what the base item is worth on its own.
-   */
-  includeSockets?: boolean;
-
-  /** Appends the trailing quest-colour marker (0x48d1e2). */
-  questColorPrefix?: boolean;
-
-  /**
-   * Annotates each stat line with the span it could have rolled within — the same numbers
-   * `ranges` returns, written inline.
+   * Non-null annotates each stat line with the span it could have rolled within — the same numbers
+   * `ranges` returns, written inline. The game has no such mode, so this makes the output
+   * deliberately NOT byte-identical.
    *
-   * The game has no such mode, so this makes the output deliberately NOT byte-identical. Off by
-   * default, which is why every existing render is unaffected.
-   *
-   * Only lines that display one stat are annotated: every modifier, plus the Defense line. A stat
-   * with no span, or one whose value could only ever have been what it is, is left alone rather
-   * than annotated with a degenerate range.
+   * Only lines that display one stat are annotated: every modifier, plus the Defense line.
    */
-  showRolledRanges?: boolean;
+  ranges?: RangeDisplay | null;
+
+  /** What the render does with the socket fillers. Defaults to `'merged'`. */
+  sockets?: SocketMode;
 
   /**
-   * How a span is written when `showRolledRanges` is on. Unset uses `defaultRangeAnnotation`,
-   * which gives ` [5-15]`.
+   * False renders a WORN set piece as though its socket fillers still applied.
    *
-   * Return null or an empty string to suppress one — which is how you show ranges for some stats
-   * and not others.
-   */
-  rangeAnnotation?: (ranges: readonly RolledStatRange[]) => string | null;
-
-  /**
-   * The `ItemTooltipColor` to paint the annotation, or -1 to inherit the line's. A marker restoring
-   * the line's own colour follows the annotation, so nothing after it is affected. Only meaningful
-   * for the coloured text — `Tooltip.text` strips no markers, so they appear there too, exactly as
-   * the game's own embedded markers do.
+   * ITEM_RecalcAllEquippedItems 0x4c1350 detaches an equipped set item's stat list and rebuilds it
+   * through ITEM_ProcessSetItemEquip; nothing re-applies the fillers, so the game grants a worn Tal
+   * Rasha's Horadric Crest with an Um in it `All Resistances +15` rather than 30. Reproducing that
+   * is the DEFAULT and stays the default.
    *
-   * Defaults to the game's grey rather than to -1: a range is an annotation the game never draws,
-   * so inheriting the stat line's blue made it read as part of the line.
-   */
-  rangeColor?: number;
-
-  /**
-   * Renders the item WITHOUT what its fillers contribute, then one block per filler below it, so a
-   * reader can tell which gem or rune is responsible for what.
+   * Turn it off when the question is "what is this item worth" rather than "what is it giving right
+   * now" — a stash or mule view, where an item must not appear to lose its rune because something
+   * equipped it. That is the position `mergedStats` takes unconditionally; this is the same choice,
+   * made explicit for the render.
    *
-   * The game never draws this — it merges the fillers into the item's own block, which is what
-   * `render` does by default. Setting this implies `includeSockets` false for the item's own lines;
-   * the fillers are not dropped but moved. The blocks carry
-   * `ItemTooltipSection.SocketContribution`, and combined with `showRolledRanges` each filler's own
-   * spans appear against its own lines.
+   * It affects the FILLERS only. Whether the piece is equipped still decides the full-set block, the
+   * worn mask that lights the bonus tiers, and the piece list's colours, because those are facts
+   * about the wearer rather than about the sockets.
+   *
+   * Like `separateSocketContributions` and `showRolledRanges`, false is a deliberate departure from
+   * what the game draws.
    */
-  separateSocketContributions?: boolean;
+  applyWornSetDiscard?: boolean;
 
   /**
    * The CLIENT PLAYER, when that is a different unit from the viewer — i.e. a mercenary's panel.
@@ -450,8 +458,7 @@ export class TooltipEngine {
 
     // Separating the fillers means the item's own block must not contain them, which is exactly
     // what includeSockets false already does — they are moved, not dropped.
-    const includeSockets =
-      (options.includeSockets ?? true) && !(options.separateSocketContributions ?? false);
+    const includeSockets = (options.sockets ?? 'merged') === 'merged';
 
     // Derived from the viewer rather than defaulted to "none". The old default painted every piece
     // red and selected no tier, and — because the full-set block is gated on isEquipped — silently
@@ -460,11 +467,16 @@ export class TooltipEngine {
     // this costs nothing on the common path.
     const set = this.setStateOf(item, viewer);
 
-    const composed = this.compose(item, viewer, options, includeSockets, set.isEquipped ?? false);
+    // FILLER discard only. `set` keeps the real equipped state, because that is what the full-set
+    // block, the worn mask and the piece colours read — gating those on this option would
+    // reproduce, inside the library, exactly the bug that faking location causes outside it.
+    const discardFillers = (set.isEquipped ?? false) && (options.applyWornSetDiscard ?? true);
+
+    const composed = this.compose(item, viewer, options, includeSockets, discardFillers);
 
     // Installed BEFORE composing, because the annotation is written into each line's text as it is
     // built rather than patched onto the finished list.
-    if (options.showRolledRanges ?? false) {
+    if ((options.ranges ?? null) !== null) {
       this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
 
@@ -483,16 +495,11 @@ export class TooltipEngine {
         break;
     }
 
-    if (options.separateSocketContributions ?? false) {
-      lines = this.withSocketBlocks(item, viewer, options, lines, set.isEquipped ?? false);
+    if ((options.sockets ?? 'merged') === 'separated') {
+      lines = this.withSocketBlocks(item, viewer, options, lines, discardFillers);
     }
 
-    return TooltipEngine.tooltip(
-      composed,
-      lines,
-      options,
-      TooltipEngine.lengthCapFor(composed.kind),
-    );
+    return TooltipEngine.tooltip(composed, lines, TooltipEngine.lengthCapFor(composed.kind));
   }
 
   /**
@@ -512,10 +519,8 @@ export class TooltipEngine {
    * `hostIsEquipped` must be the same value `compose` was given. This mode MOVES the fillers out of
    * the item's block; it must never ADD anything the merged render would not have shown. A worn set
    * item's fillers are discarded by recalc (see `SocketStatSynthesis.fillersAreDiscardedByRecalc`),
-   * so they are absent from the item's block — and a block listing them below it claimed the item
-   * granted stats it does not. Reported as "a socketed set piece does not lose socketed stats": on
-   * an equipped Tal Rasha's Horadric Crest with an Um, nothing moved because nothing was there,
-   * while a rune block appeared out of nowhere.
+   * so they are absent from the item's block, and a block listing them below it would claim the
+   * item grants stats it does not.
    */
   private withSocketBlocks(
     item: Unit,
@@ -578,7 +583,7 @@ export class TooltipEngine {
         asItem.sections.createModifierGenerator(contribution),
       );
 
-      if (options.showRolledRanges ?? false) {
+      if ((options.ranges ?? null) !== null) {
         // A jewel's spans come from ITS OWN affixes, so it is ranged as the item it is. A gem or
         // rune is ranged from the gems.txt properties it lends the host — which in shipped data
         // never roll, so those blocks come out unannotated.
@@ -594,7 +599,7 @@ export class TooltipEngine {
               ),
               options,
             );
-        composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+        composer.rangeColor = options.ranges?.color ?? ItemTooltipColor.SocketedOrEthereal;
       }
 
       for (const line of composer.composeModifiersOnly(contribution)) {
@@ -692,7 +697,7 @@ export class TooltipEngine {
   ): void {
     composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets, false);
     composer.sectionRangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
-    composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+    composer.rangeColor = options.ranges?.color ?? ItemTooltipColor.SocketedOrEthereal;
   }
 
   /**
@@ -760,7 +765,7 @@ export class TooltipEngine {
     byKey: Map<number, RolledStatRange>,
     options: TooltipOptions,
   ): (shownStats: readonly number[], layer: number) => string | null {
-    const format = options.rangeAnnotation ?? TooltipEngine.defaultRangeAnnotation;
+    const format = options.ranges?.format ?? TooltipEngine.defaultRangeAnnotation;
 
     return (shownStats, layer) => {
       const found: RolledStatRange[] = [];
@@ -806,10 +811,10 @@ export class TooltipEngine {
 
     options = options ?? {};
 
-    const includeSockets =
-      (options.includeSockets ?? true) && !(options.separateSocketContributions ?? false);
+    const includeSockets = (options.sockets ?? 'merged') === 'merged';
 
-    const composed = this.compose(item, viewer, options, includeSockets, set.isEquipped ?? false);
+    const discardFillers = (set.isEquipped ?? false) && (options.applyWornSetDiscard ?? true);
+    const composed = this.compose(item, viewer, options, includeSockets, discardFillers);
 
     if (composed.kind !== ItemTooltipKind.IdentifiedSetItem) {
       throw new NotSupportedException(
@@ -819,28 +824,22 @@ export class TooltipEngine {
       );
     }
 
-    if (options.showRolledRanges ?? false) {
+    if ((options.ranges ?? null) !== null) {
       this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
 
     let lines = this.setItemLines(item, viewer, composed, set);
 
-    if (options.separateSocketContributions ?? false) {
-      lines = this.withSocketBlocks(item, viewer, options, lines, set.isEquipped ?? false);
+    if ((options.sockets ?? 'merged') === 'separated') {
+      lines = this.withSocketBlocks(item, viewer, options, lines, discardFillers);
     }
 
-    return TooltipEngine.tooltip(
-      composed,
-      lines,
-      options,
-      ItemTooltipComposer.UnlimitedTooltipLength,
-    );
+    return TooltipEngine.tooltip(composed, lines, ItemTooltipComposer.UnlimitedTooltipLength);
   }
 
   /**
    * The set-item body, shared by `render` and `renderSetItem` so that both reach it with the option
-   * handling already applied. Routing the set path through its own entry point is what previously
-   * made showRolledRanges and separateSocketContributions no-ops on all 127 pieces.
+   * handling already applied.
    */
   private setItemLines(
     item: Unit,
@@ -875,10 +874,12 @@ export class TooltipEngine {
   private static tooltip(
     composed: Composed,
     lines: readonly ItemTooltipLine[],
-    options: TooltipOptions,
     maxLength: number,
   ): Tooltip {
-    const questPrefix = options.questColorPrefix ?? false;
+    // DERIVED, not a knob. 0x48ec3f gates the marker on the items.txt `quest` byte of the item's
+    // own row (+0x12A) and excludes Wirt's Leg by code (0x48ec52, 'leg '); nothing the caller
+    // supplies reaches it.
+    const questPrefix = composed.context.isQuestItem && !composed.context.isWirtsLeg;
     const composer = composed.composer;
 
     return {
@@ -1168,12 +1169,8 @@ export class TooltipEngine {
     // BOTH filler channels, because they are disjoint and each covers what the other cannot. The
     // VIEW walks a filler's own captured stat lists, which is the only place a JEWEL's affixes
     // live; contributions synthesises from gems.txt and returns nothing for any filler that already
-    // carries stats, precisely so the two cannot double-count.
-    //
-    // Taking only the synthesis therefore counted a jewel ZERO times — and would have lost every
-    // gem and rune of a server-side capture, which records the mods the engine already assigned —
-    // while socketFillerStats reported them, so the two entry points added in one change disagreed
-    // about the same filler.
+    // carries stats, precisely so the two cannot double-count. The synthesis alone reaches neither
+    // a jewel nor a server-side capture's fillers.
     view.includeSockets = includeSockets;
 
     let merged = ItemStatReader.reconstructView(item, view);
@@ -1209,10 +1206,8 @@ export class TooltipEngine {
       }
     }
 
-    // The first term is what the SYNTHESIS contributed, not merely that a filler exists. Only the
-    // synthesis is gated on the recalc discard — a jewel's stats arrive through the view, which
-    // render does not gate either — so a socketed JEWEL makes the two views agree, and a flag
-    // raised on "has a filler" claimed a disagreement that was not there.
+    // What the SYNTHESIS contributed, not merely that a filler exists: only the synthesis is gated
+    // on the recalc discard, so a socketed JEWEL leaves the two views in agreement.
     return {
       stats,
       fillersIgnoredBecauseWorn:
@@ -1369,10 +1364,10 @@ export class TooltipEngine {
     // buckets show the item's own values. The socket bucket gets its own, built from the fillers'
     // properties, because the item's spans do not describe what a gem contributes.
     const own =
-      (options.showRolledRanges ?? false) ? this.buildRangeAnnotation(item, options, false) : null;
+      (options.ranges ?? null) !== null ? this.buildRangeAnnotation(item, options, false) : null;
 
     const sockets =
-      (options.showRolledRanges ?? false) ? this.buildSocketRangeAnnotation(item, options) : null;
+      (options.ranges ?? null) !== null ? this.buildSocketRangeAnnotation(item, options) : null;
 
     return {
       base: this.describe(
@@ -1424,7 +1419,7 @@ export class TooltipEngine {
 
     if (annotation !== null) {
       composer.rangeAnnotation = annotation;
-      composer.rangeColor = options.rangeColor ?? ItemTooltipColor.SocketedOrEthereal;
+      composer.rangeColor = options.ranges?.color ?? ItemTooltipColor.SocketedOrEthereal;
     }
 
     return composer.composeModifiersOnly(selected);

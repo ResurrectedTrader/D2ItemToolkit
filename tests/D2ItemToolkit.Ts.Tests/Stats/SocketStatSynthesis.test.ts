@@ -150,7 +150,7 @@ describe('socket stat synthesis', () => {
 
   it('excludes the synthesised stats when sockets are excluded', () => {
     const text = TooltipEngine.embedded.render(host('urg', 'r18', 'r18', 'r23'), null, {
-      includeSockets: false,
+      sockets: 'excluded',
     }).text;
 
     expect(text).not.toContain('Dexterity');

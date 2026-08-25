@@ -422,19 +422,18 @@ export function renderRecord(
     // hand-written tests on each side, which cannot catch the two implementations agreeing to
     // differ.
     payload.annotated = engine().render(unit, wearer, {
-      showRolledRanges: true,
-      rangeColor: ItemTooltipColor.White,
+      ranges: { color: ItemTooltipColor.White },
     }).coloredText;
 
     payload.socketsSplit = engine().render(unit, wearer, {
-      separateSocketContributions: true,
-      showRolledRanges: true,
+      sockets: 'separated',
+      ranges: {},
     }).coloredText;
 
     // Breakdown was outside the differential entirely, which left its per-bucket span choice — the
     // item's own for three of them, the fillers' for the fourth — checked only by hand-written
     // tests on each side.
-    const b = engine().breakdown(unit, wearer, { showRolledRanges: true });
+    const b = engine().breakdown(unit, wearer, { ranges: {} });
     const texts = (lines: readonly { text: string | null }[]): string[] =>
       lines.map(l => l.text ?? '');
 

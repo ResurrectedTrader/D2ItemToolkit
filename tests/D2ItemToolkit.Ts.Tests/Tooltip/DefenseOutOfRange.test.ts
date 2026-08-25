@@ -50,7 +50,7 @@ function vipermagi(baseDefense: number): Unit {
 }
 
 function defenseLine(item: Unit): string {
-  const line = Engine.render(item, null, { showRolledRanges: true, rangeColor: -1 })
+  const line = Engine.render(item, null, { ranges: { color: -1 } })
     .lines.map(l => (l.text ?? '').replace(/ÿc./g, '').replace(/\n+$/, ''))
     .find(t => t.startsWith('Defense:'));
 

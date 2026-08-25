@@ -99,7 +99,7 @@ function socketedSword(...fillers: Unit[]): Unit {
  * annotation's TEXT, and the default wraps every span in two colour markers.
  */
 function separated(withRanges = false): TooltipOptions {
-  return { separateSocketContributions: true, showRolledRanges: withRanges, rangeColor: -1 };
+  return { sockets: 'separated', ranges: withRanges ? { color: -1 } : null };
 }
 
 function section(tooltip: Tooltip, want: ItemTooltipSection): string[] {
@@ -298,7 +298,7 @@ describe('separateSocketContributions', () => {
     // "Fire Resist +28% [11-20]" — a number outside its own range.
     const c = fireResCase();
 
-    const line = Engine.render(c.host, null, { showRolledRanges: true })
+    const line = Engine.render(c.host, null, { ranges: {} })
       .lines.map(l => l.text ?? '')
       .filter(l => l.includes('Fire Resist'));
 
@@ -330,7 +330,7 @@ describe('separateSocketContributions', () => {
     // VALUE against the item's SPAN — because reconstructing "just the fillers" silently folded in
     // the host's own sources.
     const c = fireResCase();
-    const b = Engine.breakdown(c.host, null, { showRolledRanges: true });
+    const b = Engine.breakdown(c.host, null, { ranges: {} });
 
     const magic = b.magic.map(l => l.text ?? '').filter(l => l.includes('Fire Resist'));
     const sockets = b.sockets.map(l => l.text ?? '').filter(l => l.includes('Fire Resist'));

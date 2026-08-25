@@ -89,8 +89,8 @@ namespace D2ItemToolkit.Tests
         private static TooltipOptions Annotating()
         {
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
             return options;
         }
 
@@ -262,7 +262,7 @@ namespace D2ItemToolkit.Tests
         public void The_format_is_the_callers_to_choose()
         {
             TooltipOptions options = Annotating();
-            options.RangeAnnotation = ranges =>
+            options.Ranges.Format = ranges =>
                 ranges[0].StatId == 89
                     ? " (" + ranges[0].Low + ".." + ranges[0].High + ")"
                     : null;
@@ -283,9 +283,9 @@ namespace D2ItemToolkit.Tests
             // as part of the line. The default is the game's own grey — asserted here rather than
             // left implicit, because every other test in this file opts out of it.
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
+            options.Ranges = new RangeDisplay();
 
-            Assert.Equal(ItemTooltipColor.SocketedOrEthereal, options.RangeColor);
+            Assert.Equal(ItemTooltipColor.SocketedOrEthereal, options.Ranges.Color);
 
             string[] lines = Texts(Engine.Render(Unique("The Eye of Etlich"), null, options));
             string light = lines.Single(l => l.Contains("Light Radius"));
@@ -299,7 +299,7 @@ namespace D2ItemToolkit.Tests
         public void The_annotation_can_be_painted_its_own_colour()
         {
             TooltipOptions options = Annotating();
-            options.RangeColor = ItemTooltipColor.White;
+            options.Ranges.Color = ItemTooltipColor.White;
 
             string[] lines = Texts(Engine.Render(Unique("The Eye of Etlich"), null, options));
             string light = lines.Single(l => l.Contains("Light Radius"));
@@ -320,7 +320,7 @@ namespace D2ItemToolkit.Tests
             Unit item = Unique("The Eye of Etlich");
 
             TooltipOptions options = Annotating();
-            options.RangeColor = ItemTooltipColor.White;
+            options.Ranges.Color = ItemTooltipColor.White;
 
             IReadOnlyList<ItemTooltipLine> plain = Engine.Render(item).Lines;
             IReadOnlyList<ItemTooltipLine> painted = Engine.Render(item, null, options).Lines;

@@ -112,8 +112,7 @@ namespace D2ItemToolkit
         /// Set only when the gems.txt SYNTHESIS actually contributed, which is the only part the
         /// discard gates. A JEWEL's affixes arrive through the stat view, which
         /// <see cref="TooltipEngine.Render"/> does not gate either, so a jewel-socketed worn set
-        /// piece leaves the two views in agreement and this stays false — an earlier version keyed
-        /// it on "has a filler" and claimed a disagreement that was not there.
+        /// piece leaves the two views in agreement and this stays false.
         /// </summary>
         public bool FillersIgnoredBecauseWorn { get; private set; }
 

@@ -353,8 +353,8 @@ namespace D2ItemToolkit.Tools
         private static string Annotated(Unit record, Unit wearer)
         {
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = ItemTooltipColor.White;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = ItemTooltipColor.White;
 
             return Engine.Render(record, wearer, options).ColoredText;
         }
@@ -366,8 +366,8 @@ namespace D2ItemToolkit.Tools
         private static string SocketsSplit(Unit record, Unit wearer)
         {
             var options = new TooltipOptions();
-            options.SeparateSocketContributions = true;
-            options.ShowRolledRanges = true;
+            options.Sockets = SocketMode.Separated;
+            options.Ranges = new RangeDisplay();
 
             return Engine.Render(record, wearer, options).ColoredText;
         }
@@ -380,7 +380,7 @@ namespace D2ItemToolkit.Tools
         private static string Breakdown(Unit record, Unit wearer)
         {
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
+            options.Ranges = new RangeDisplay();
 
             TooltipBreakdown b = Engine.Breakdown(record, wearer, options);
 

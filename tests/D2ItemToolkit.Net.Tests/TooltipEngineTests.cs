@@ -91,7 +91,7 @@ namespace D2ItemToolkit.Tests
         public void Excluding_sockets_drops_only_the_fillers_contribution()
         {
             var options = new TooltipOptions();
-            options.IncludeSockets = false;
+            options.Sockets = SocketMode.Excluded;
 
             string text = TooltipEngine.Embedded.Render(Item(), Player(), options).Text;
 
@@ -577,7 +577,7 @@ namespace D2ItemToolkit.Tests
             // Same item, two unrelated implementations of the contract. Sockets are empty here, so
             // compare against the socketless render.
             var options = new TooltipOptions();
-            options.IncludeSockets = false;
+            options.Sockets = SocketMode.Excluded;
 
             Assert.Equal(
                 engine.Render(Item(), Player(), options).Text,
@@ -878,14 +878,16 @@ namespace D2ItemToolkit.Tests
             // Lines are composed eagerly, so every knob is baked in at Render time. Reading the
             // options object again from the Text getter made the result change under the caller,
             // and TypeScript captured by value — so the same sequence gave two different strings.
+
             var options = new TooltipOptions();
-            options.QuestColorPrefix = false;
+            options.Sockets = SocketMode.Merged;
 
             Tooltip tip = TooltipEngine.Embedded.Render(Item(), Player(), options);
             string before = tip.Text;
             string beforeColored = tip.ColoredText;
 
-            options.QuestColorPrefix = true;
+            options.Sockets = SocketMode.Separated;
+            options.Ranges = new RangeDisplay();
 
             Assert.Equal(before, tip.Text);
             Assert.Equal(beforeColored, tip.ColoredText);

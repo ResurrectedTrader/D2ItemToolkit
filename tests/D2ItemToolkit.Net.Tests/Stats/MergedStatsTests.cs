@@ -387,5 +387,87 @@ namespace D2ItemToolkit.Tests
 
             Assert.Equal(22, inShield.Single(s => s.StatId == StatFireResist).Value);
         }
+        /// <summary>
+        /// The option that replaces faking <see cref="IUnit.Location"/>. Off, a worn set piece
+        /// renders as though its fillers still applied — and ONLY that changes, which is the whole
+        /// point: `location` also decides the worn mask, the piece colours and the full-set block,
+        /// so lying about it moves all four at once.
+        /// </summary>
+        [Fact]
+        public void ApplyWornSetDiscard_off_restores_the_fillers_and_nothing_else()
+        {
+            Unit worn = CrestWithUm(LocationEquipped);
+
+            var asPotential = new TooltipOptions();
+            asPotential.ApplyWornSetDiscard = false;
+
+            string[] defaultMods = Mods(Engine.Render(worn));
+            string[] potentialMods = Mods(Engine.Render(worn, null, asPotential));
+
+            // The Crest grants res-all 15 of its OWN and an Um grants a helm another 15, so the two
+            // are indistinguishable by presence — only the NUMBER says whether the rune counted.
+            // That collision is exactly what made the original report read as a bug.
+            Assert.Contains("All Resistances +15", defaultMods);
+            Assert.Contains("All Resistances +30", potentialMods);
+
+            // The set piece is still EQUIPPED for every other purpose. Faking Location would have
+            // moved these too.
+            Tooltip byDefault = Engine.Render(worn);
+            Tooltip potential = Engine.Render(worn, null, asPotential);
+
+            Assert.Equal(
+                Sections(byDefault, ItemTooltipSection.SetPieceList),
+                Sections(potential, ItemTooltipSection.SetPieceList));
+            Assert.Equal(
+                Sections(byDefault, ItemTooltipSection.PartialSetBonus),
+                Sections(potential, ItemTooltipSection.PartialSetBonus));
+            Assert.Equal(
+                Sections(byDefault, ItemTooltipSection.FullSetBonus),
+                Sections(potential, ItemTooltipSection.FullSetBonus));
+        }
+
+        [Fact]
+        public void ApplyWornSetDiscard_changes_nothing_when_the_discard_does_not_apply()
+        {
+            // Not worn, so there is no discard to switch off and the option is inert. This is what
+            // stops it becoming a general "ignore sockets" knob by accident.
+            Unit carried = CrestWithUm(LocationStash);
+
+            var asPotential = new TooltipOptions();
+            asPotential.ApplyWornSetDiscard = false;
+
+            Assert.Equal(
+                Engine.Render(carried).Text, Engine.Render(carried, null, asPotential).Text);
+        }
+
+        [Fact]
+        public void ApplyWornSetDiscard_off_agrees_with_MergedStats()
+        {
+            // The two surfaces answer the same question once the render is told to. Before the
+            // option, the only way to line them up was to falsify the record.
+            Unit worn = CrestWithUm(LocationEquipped);
+
+            var asPotential = new TooltipOptions();
+            asPotential.ApplyWornSetDiscard = false;
+
+            Assert.Contains("All Resistances +30", Mods(Engine.Render(worn, null, asPotential)));
+            Assert.Equal(30, ValueOf(Engine.MergedStats(worn), StatFireResist));
+        }
+
+        private static string[] Mods(Tooltip tip)
+        {
+            return Sections(tip, ItemTooltipSection.Modifiers);
+        }
+
+        private static string[] Sections(Tooltip tip, ItemTooltipSection section)
+        {
+            return tip.Lines
+                .Where(l => l.Section == section)
+                .Select(l => System.Text.RegularExpressions.Regex
+                    .Replace(l.Text ?? string.Empty, "ÿc.", string.Empty).TrimEnd('\n'))
+                .Where(t => t.Length != 0)
+                .ToArray();
+        }
+
     }
 }

@@ -107,9 +107,13 @@ namespace D2ItemToolkit.Tests
         private static TooltipOptions Separated(bool withRanges = false)
         {
             var options = new TooltipOptions();
-            options.SeparateSocketContributions = true;
-            options.ShowRolledRanges = withRanges;
-            options.RangeColor = -1;
+            options.Sockets = SocketMode.Separated;
+
+            if (withRanges)
+            {
+                options.Ranges = new RangeDisplay();
+                options.Ranges.Color = -1;
+            }
             return options;
         }
 
@@ -332,7 +336,7 @@ namespace D2ItemToolkit.Tests
             Unit host = FireResCase(out itemLow, out itemHigh, out jewelLow, out jewelHigh);
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
+            options.Ranges = new RangeDisplay();
 
             string line = Engine.Render(host, null, options).Lines
                 .Select(l => l.Text ?? string.Empty)
@@ -372,7 +376,7 @@ namespace D2ItemToolkit.Tests
             Unit host = FireResCase(out itemLow, out itemHigh, out jewelLow, out jewelHigh);
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
+            options.Ranges = new RangeDisplay();
 
             TooltipBreakdown b = Engine.Breakdown(host, null, options);
 

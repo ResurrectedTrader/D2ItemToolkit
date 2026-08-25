@@ -85,7 +85,7 @@ function uniqueItem(index: string): Unit {
  * annotated line — so the tests below, which are about the TEXT, opt out of it. The default itself
  * is pinned by 'is grey unless asked otherwise'.
  */
-const annotating: TooltipOptions = { showRolledRanges: true, rangeColor: -1 };
+const annotating: TooltipOptions = { ranges: { color: -1 } };
 
 function texts(tooltip: Tooltip): string[] {
   return tooltip.lines.map(l => l.text ?? '');
@@ -233,9 +233,7 @@ describe('the showRolledRanges flag', () => {
     // A range is text the game never draws, so inheriting the stat line's blue made it read as part
     // of the line. The default is the game's own grey — asserted here rather than left implicit,
     // because every other test in this file opts out of it.
-    const lines = texts(
-      Engine.render(uniqueItem('The Eye of Etlich'), null, { showRolledRanges: true }),
-    );
+    const lines = texts(Engine.render(uniqueItem('The Eye of Etlich'), null, { ranges: {} }));
     const light = lines.filter(l => l.includes('Light Radius'));
 
     expect(light[0]).toContain(ItemTooltipColor.Marker + '5 [1-5]' + ItemTooltipColor.Marker + '3');
@@ -243,8 +241,7 @@ describe('the showRolledRanges flag', () => {
 
   it('can paint the annotation its own colour', () => {
     const options: TooltipOptions = {
-      showRolledRanges: true,
-      rangeColor: ItemTooltipColor.White,
+      ranges: { color: ItemTooltipColor.White },
     };
 
     const lines = texts(Engine.render(uniqueItem('The Eye of Etlich'), null, options));
@@ -262,8 +259,7 @@ describe('the showRolledRanges flag', () => {
 
     const plain = Engine.render(item).lines;
     const painted = Engine.render(item, null, {
-      showRolledRanges: true,
-      rangeColor: ItemTooltipColor.White,
+      ranges: { color: ItemTooltipColor.White },
     }).lines;
 
     expect(painted.length).toBe(plain.length);
@@ -282,12 +278,13 @@ describe('the showRolledRanges flag', () => {
 
   it('lets the caller choose the format', () => {
     const options: TooltipOptions = {
-      showRolledRanges: true,
-      rangeColor: -1,
-      rangeAnnotation: ranges =>
-        ranges[0]?.statId === 89
-          ? ' (' + String(ranges[0].low) + '..' + String(ranges[0].high) + ')'
-          : null,
+      ranges: {
+        color: -1,
+        format: ranges =>
+          ranges[0]?.statId === 89
+            ? ' (' + String(ranges[0].low) + '..' + String(ranges[0].high) + ')'
+            : null,
+      },
     };
 
     const lines = texts(Engine.render(uniqueItem('The Eye of Etlich'), null, options));

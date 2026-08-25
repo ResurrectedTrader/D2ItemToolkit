@@ -116,7 +116,7 @@ describe('reported defects', () => {
   it('a socketed set item honours separateSocketContributions', () => {
     // REPORTED: "socketed talrasha helm with um rune, when I press ctrl, it just removes some line
     // breaks, but does not break the um rune apart, as a separate item."
-    const tip = Engine.render(socketedSetHelm(), null, { separateSocketContributions: true });
+    const tip = Engine.render(socketedSetHelm(), null, { sockets: 'separated' });
 
     expect(tip.lines.some(l => l.section === ItemTooltipSection.SocketContribution)).toBe(true);
   });
@@ -125,8 +125,7 @@ describe('reported defects', () => {
     // The same defect's other half: render returned through the set-item builder before the
     // annotation was installed, so ctrl did nothing on any of the 127 set pieces.
     const tip = Engine.render(socketedSetHelm(), null, {
-      showRolledRanges: true,
-      rangeColor: -1,
+      ranges: { color: -1 },
     });
 
     expect(tip.lines.some(l => (l.text ?? '').includes('['))).toBe(true);
@@ -164,7 +163,7 @@ describe('reported defects', () => {
       ],
     });
 
-    const tip = Engine.render(shield, null, { showRolledRanges: true, rangeColor: -1 });
+    const tip = Engine.render(shield, null, { ranges: { color: -1 } });
 
     // Markers stripped first: the Defense line carries an embedded marker, and reading digits
     // straight off it yields "332" for a value of 32.
@@ -194,7 +193,7 @@ describe('reported defects', () => {
       statsLists: [{ stateNo: 0, flags: ListFlagsMagic, stats: [{ id: 7, value: 11 << 8 }] }],
     });
 
-    const tip = Engine.render(charm, null, { showRolledRanges: true, rangeColor: -1 });
+    const tip = Engine.render(charm, null, { ranges: { color: -1 } });
 
     const life = tip.lines.map(l => plain(l.text)).find(t => t.includes('Life'));
     expect(life).toBeDefined();

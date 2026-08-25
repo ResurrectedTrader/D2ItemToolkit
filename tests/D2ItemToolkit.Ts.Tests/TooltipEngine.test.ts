@@ -16,6 +16,7 @@ import {
   createUnit,
   unitFromJson,
   type ItemTooltipLine,
+  type TooltipOptions,
   type Unit,
 } from '../../src/D2ItemToolkit.Ts/src/index.js';
 
@@ -90,7 +91,7 @@ describe('the facade', () => {
   });
 
   it('drops only the filler contribution when sockets are excluded', () => {
-    const text = TooltipEngine.embedded.render(item(), player(), { includeSockets: false }).text;
+    const text = TooltipEngine.embedded.render(item(), player(), { sockets: 'excluded' }).text;
 
     expect(text).toContain('Fire Resist +25%');
     expect(text).not.toContain('Fire Resist +63%');
@@ -534,13 +535,16 @@ describe('parity with the C# engine', () => {
   });
 
   it('does not change a rendered tooltip when the options object changes', () => {
-    const options = { questColorPrefix: false };
+    // Lines are composed eagerly, so every knob is baked in at render time; the tooltip closes
+    // over none of them.
+    const options: TooltipOptions = { sockets: 'merged' };
 
     const tip = TooltipEngine.embedded.render(item(), player(), options);
     const before = tip.text;
     const beforeColored = tip.coloredText;
 
-    options.questColorPrefix = true;
+    options.sockets = 'separated';
+    options.ranges = {};
 
     expect(tip.text).toBe(before);
     expect(tip.coloredText).toBe(beforeColored);

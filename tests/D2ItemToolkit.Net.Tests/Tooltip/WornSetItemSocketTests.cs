@@ -56,7 +56,7 @@ namespace D2ItemToolkit.Tests
         private static TooltipOptions Separated()
         {
             var options = new TooltipOptions();
-            options.SeparateSocketContributions = true;
+            options.Sockets = SocketMode.Separated;
             return options;
         }
 
@@ -161,8 +161,8 @@ namespace D2ItemToolkit.Tests
             crest.StatsLists.Add(new UnitStatList(0, ItemStatListFlags.Magic).Add(StatDefense, 45));
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
 
             Tooltip tip = Engine.Render(crest, null, options);
 

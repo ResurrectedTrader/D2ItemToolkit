@@ -86,7 +86,7 @@ export enum ItemTooltipSection {
 
   /**
    * Not a section the game has. One block per socket filler, emitted below the item when
-   * `TooltipOptions.separateSocketContributions` is set, so a reader can tell what each gem or rune
+   * `TooltipOptions.sockets` is `'separated'`, so a reader can tell what each gem or rune
    * is actually contributing. Never produced otherwise.
    */
   SocketContribution = 'SocketContribution',

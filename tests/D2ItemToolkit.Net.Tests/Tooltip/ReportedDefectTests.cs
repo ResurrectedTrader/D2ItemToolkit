@@ -88,7 +88,7 @@ namespace D2ItemToolkit.Tests
             Unit helm = SocketedSetHelm();
 
             var options = new TooltipOptions();
-            options.SeparateSocketContributions = true;
+            options.Sockets = SocketMode.Separated;
 
             Tooltip tip = Engine.Render(helm, null, options);
             Dump("set item, SeparateSocketContributions = true", tip);
@@ -106,8 +106,8 @@ namespace D2ItemToolkit.Tests
             Unit helm = SocketedSetHelm();
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
 
             Tooltip tip = Engine.Render(helm, null, options);
             Dump("set item, ShowRolledRanges = true", tip);
@@ -152,8 +152,8 @@ namespace D2ItemToolkit.Tests
                 new UnitStatList(0, ItemStatListFlags.Magic).Add(StatArmorPercent, pct));
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
 
             Tooltip tip = Engine.Render(shield, null, options);
             Dump("enhanced-defence shield, ShowRolledRanges = true", tip);
@@ -205,8 +205,8 @@ namespace D2ItemToolkit.Tests
                 new UnitStatList(0, ItemStatListFlags.Magic).Add(7, 11 << 8));
 
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
 
             Tooltip tip = Engine.Render(charm, null, options);
             Dump("charm with +Life, ShowRolledRanges = true", tip);

@@ -61,7 +61,7 @@ function crestWithUm(location: number): Unit {
   });
 }
 
-const separated: TooltipOptions = { separateSocketContributions: true };
+const separated: TooltipOptions = { sockets: 'separated' };
 
 function sectioned(tip: Tooltip, section: ItemTooltipSection): string[] {
   return tip.lines
@@ -145,7 +145,7 @@ describe('a worn set item and its sockets', () => {
       { stateNo: 0, flags: 0x40, stats: [{ id: StatDefense, value: 45 }] },
     ];
 
-    const tip = Engine.render(crest, null, { showRolledRanges: true, rangeColor: -1 });
+    const tip = Engine.render(crest, null, { ranges: { color: -1 } });
 
     expect(sectioned(tip, ItemTooltipSection.ArmorClass)).toEqual(['Defense: 121 [99-131]']);
     expect(sectioned(tip, ItemTooltipSection.Modifiers).filter(t => t.includes('Defense'))).toEqual(

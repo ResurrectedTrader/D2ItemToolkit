@@ -29,6 +29,8 @@ export { ItemQualityNo } from './Tooltip/ItemNameBuilder.js';
 export {
   TooltipEngine,
   type ItemAppearance,
+  type RangeDisplay,
+  type SocketMode,
   type ItemRequirements,
   type Tooltip,
   type TooltipBreakdown,

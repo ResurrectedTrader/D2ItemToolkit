@@ -122,7 +122,7 @@ namespace D2ItemToolkit
 
             // Separating the fillers means the item's own block must not contain them, which is
             // exactly what IncludeSockets false already does — they are moved, not dropped.
-            bool includeSockets = opts.IncludeSockets && !opts.SeparateSocketContributions;
+            bool includeSockets = opts.Sockets == SocketMode.Merged;
 
             // Derived from the viewer rather than defaulted to "none". The old default painted
             // every piece red and selected no tier, and — because the full-set block is gated on
@@ -130,11 +130,18 @@ namespace D2ItemToolkit
             // that carries nothing still yields exactly that empty input, and a non-set item exits
             // SetStateOf after the Location test, so this costs nothing on the common path.
             SetItemTooltipInput set = SetStateOf(item, viewer);
-            Composed composed = Compose(item, viewer, opts, includeSockets, set.IsEquipped);
+
+            // FILLER discard only. `set` keeps the real equipped state, because that is what the
+            // full-set block, the worn mask and the piece colours read — gating those on this
+            // option would reproduce, inside the library, exactly the bug that faking Location
+            // causes outside it.
+            bool discardFillers = set.IsEquipped && opts.ApplyWornSetDiscard;
+
+            Composed composed = Compose(item, viewer, opts, includeSockets, discardFillers);
 
             // Installed BEFORE composing, because the annotation is written into each line's text
             // as it is built rather than patched onto the finished list.
-            if (opts.ShowRolledRanges)
+            if (opts.Ranges != null)
             {
                 InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
@@ -155,12 +162,13 @@ namespace D2ItemToolkit
                     break;
             }
 
-            if (opts.SeparateSocketContributions)
+            if (opts.Sockets == SocketMode.Separated)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines, set.IsEquipped);
+                lines = WithSocketBlocks(item, viewer, opts, lines, discardFillers);
             }
 
-            return new Tooltip(composed.Kind, lines, composed.Composer, opts);
+            return new Tooltip(
+                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context));
         }
 
         /// <summary>
@@ -172,10 +180,8 @@ namespace D2ItemToolkit
         /// This mode MOVES the fillers out of the item's block; it must never ADD anything the
         /// merged render would not have shown. A worn set item's fillers are discarded by recalc
         /// (see <see cref="SocketStatSynthesis.FillersAreDiscardedByRecalc"/>), so they are absent
-        /// from the item's block — and a block listing them below it claimed the item granted stats
-        /// it does not. Reported as "a socketed set piece does not lose socketed stats": on an
-        /// equipped Tal Rasha's Horadric Crest with an Um, nothing moved because nothing was there,
-        /// while a rune block appeared out of nowhere.
+        /// from the item's block, and a block listing them below it would claim the item grants
+        /// stats it does not.
         /// </summary>
         private IReadOnlyList<ItemTooltipLine> WithSocketBlocks(
             IUnit item,
@@ -242,7 +248,7 @@ namespace D2ItemToolkit
                 var composer = new ItemTooltipComposer(
                     asItem.Sections, asItem.Sections.CreateModifierGenerator(contribution));
 
-                if (options.ShowRolledRanges)
+                if (options.Ranges != null)
                 {
                     // A jewel's spans come from ITS OWN affixes, so it is ranged as the item it is.
                     // A gem or rune is ranged from the gems.txt properties it lends the host —
@@ -250,7 +256,7 @@ namespace D2ItemToolkit
                     composer.RangeAnnotation = carriesOwnStats
                         ? BuildRangeAnnotation(filler, options)
                         : BuildFillerRangeAnnotation(item, filler, slot, options);
-                    composer.RangeColor = options.RangeColor;
+                    composer.RangeColor = options.Ranges.Color;
                 }
 
                 foreach (ItemTooltipLine line in composer.ComposeModifiersOnly(contribution))
@@ -353,7 +359,7 @@ namespace D2ItemToolkit
             Dictionary<int, RolledStatRange> byKey, TooltipOptions options)
         {
             Func<IReadOnlyList<RolledStatRange>, string> format =
-                options.RangeAnnotation ?? DefaultRangeAnnotation;
+                options.Ranges.Format ?? DefaultRangeAnnotation;
 
             return (shownStats, layer) =>
             {
@@ -460,7 +466,7 @@ namespace D2ItemToolkit
                 BuildRangeAnnotation(item, options, includeSockets, includeBaseDefense: false);
             composer.SectionRangeAnnotation =
                 BuildRangeAnnotation(item, options, includeSockets);
-            composer.RangeColor = options.RangeColor;
+            composer.RangeColor = options.Ranges.Color;
         }
 
         /// <summary>
@@ -667,8 +673,9 @@ namespace D2ItemToolkit
             if (set == null) throw new ArgumentNullException("set");
 
             TooltipOptions opts = options ?? TooltipOptions.Default;
-            bool includeSockets = opts.IncludeSockets && !opts.SeparateSocketContributions;
-            Composed composed = Compose(item, viewer, opts, includeSockets, set.IsEquipped);
+            bool includeSockets = opts.Sockets == SocketMode.Merged;
+            bool discardFillers = set.IsEquipped && opts.ApplyWornSetDiscard;
+            Composed composed = Compose(item, viewer, opts, includeSockets, discardFillers);
 
             if (composed.Kind != ItemTooltipKind.IdentifiedSetItem)
             {
@@ -677,7 +684,7 @@ namespace D2ItemToolkit
                     ", not the set-item tooltip path. Call Render instead.");
             }
 
-            if (opts.ShowRolledRanges)
+            if (opts.Ranges != null)
             {
                 InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
@@ -685,19 +692,18 @@ namespace D2ItemToolkit
             IReadOnlyList<ItemTooltipLine> lines =
                 SetItemLines(item, viewer, composed, set);
 
-            if (opts.SeparateSocketContributions)
+            if (opts.Sockets == SocketMode.Separated)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines, set.IsEquipped);
+                lines = WithSocketBlocks(item, viewer, opts, lines, discardFillers);
             }
 
-            return new Tooltip(composed.Kind, lines, composed.Composer, opts);
+            return new Tooltip(
+                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context));
         }
 
         /// <summary>
         /// The set-item body, shared by <see cref="Render"/> and <see cref="RenderSetItem"/> so
-        /// that both reach it with the option handling already applied. Routing the set path
-        /// through its own entry point is what previously made ShowRolledRanges and
-        /// SeparateSocketContributions no-ops on all 127 pieces.
+        /// that both reach it with the option handling already applied.
         /// </summary>
         private IReadOnlyList<ItemTooltipLine> SetItemLines(
             IUnit item,
@@ -825,11 +831,11 @@ namespace D2ItemToolkit
             // gets its own, built from the fillers' properties, because the item's spans do not
             // describe what a gem contributes — and for a jewel it is the jewel's own affixes that
             // rolled.
-            Func<IReadOnlyList<int>, int, string> own = opts.ShowRolledRanges
+            Func<IReadOnlyList<int>, int, string> own = opts.Ranges != null
                 ? BuildRangeAnnotation(item, opts, includeSockets: false)
                 : null;
 
-            Func<IReadOnlyList<int>, int, string> sockets = opts.ShowRolledRanges
+            Func<IReadOnlyList<int>, int, string> sockets = opts.Ranges != null
                 ? BuildSocketRangeAnnotation(item, opts)
                 : null;
 
@@ -878,12 +884,8 @@ namespace D2ItemToolkit
             // BOTH filler channels, because they are disjoint and each covers what the other
             // cannot. The VIEW walks a filler's own captured stat lists, which is the only place a
             // JEWEL's affixes live; Contributions synthesises from gems.txt and returns nothing for
-            // any filler that already carries stats, precisely so the two cannot double-count.
-            //
-            // Taking only the synthesis therefore counted a jewel ZERO times — and would have lost
-            // every gem and rune of a server-side capture, which records the mods the engine
-            // already assigned — while SocketFillerStats reported them, so the two entry points
-            // added in one change disagreed about the same filler.
+            // any filler that already carries stats, precisely so the two cannot double-count. The
+            // synthesis alone reaches neither a jewel nor a server-side capture's fillers.
             view.IncludeSockets = opts.IncludeSockets;
 
             SortedDictionary<int, int> merged = ItemStatReader.ReconstructView(item, view);
@@ -925,10 +927,8 @@ namespace D2ItemToolkit
                 }
             }
 
-            // The last term is what the SYNTHESIS contributed, not merely that a filler exists.
-            // Only the synthesis is gated on the recalc discard — a jewel's stats arrive through
-            // the view, which Render does not gate either — so a socketed JEWEL makes the two views
-            // agree, and a flag raised on "has a filler" claimed a disagreement that was not there.
+            // What the SYNTHESIS contributed, not merely that a filler exists: only the synthesis
+            // is gated on the recalc discard, so a socketed JEWEL leaves the two views in agreement.
             return new ItemMergedStats(
                 stats,
                 synthesised.Count != 0
@@ -1202,7 +1202,7 @@ namespace D2ItemToolkit
             if (annotation != null)
             {
                 composer.RangeAnnotation = annotation;
-                composer.RangeColor = options.RangeColor;
+                composer.RangeColor = options.Ranges.Color;
             }
 
             return composer.ComposeModifiersOnly(selected);
@@ -1218,6 +1218,15 @@ namespace D2ItemToolkit
             public ItemIdentity Identity;
             public ItemViewer Viewer;
             public SortedDictionary<int, int> Stats;
+        }
+
+        /// <summary>
+        /// 0x48ec3f: the trailing quest-colour marker is on when the item's items.txt row has the
+        /// `quest` byte set, EXCEPT for Wirt's Leg, which 0x48ec52 excludes by code.
+        /// </summary>
+        private static bool QuestColorOf(ItemTooltipContext context)
+        {
+            return context.IsQuestItem && !context.IsWirtsLeg;
         }
 
         private Composed Compose(
@@ -1365,6 +1374,57 @@ namespace D2ItemToolkit
     }
 
     /// <summary>Per-render knobs. Everything else is unit state and comes off the record.</summary>
+    /// <summary>
+    /// What a render does with the item's socket fillers.
+    /// </summary>
+    public enum SocketMode
+    {
+        /// <summary>
+        /// What the game draws: the fillers' stats folded into the item's own block, so
+        /// `Fire Resist +28%` is the item's 20 plus a jewel's 8 on one line.
+        /// </summary>
+        Merged = 0,
+
+        /// <summary>
+        /// The item as if nothing were socketed in it. The game never draws this; it exists so a
+        /// caller can show what the base item is worth on its own — deciding whether to unsocket,
+        /// or valuing a runeword base.
+        /// </summary>
+        Excluded = 1,
+
+        /// <summary>
+        /// The item WITHOUT what its fillers contribute, then one block per filler below it, each
+        /// carrying <see cref="ItemTooltipSection.SocketContribution"/>, so a reader can tell which
+        /// gem or rune is responsible for what. The game never draws this; the fillers are moved,
+        /// not dropped.
+        /// </summary>
+        Separated = 2,
+    }
+
+    /// <summary>
+    /// Turns on the rolled-range annotation and carries how it is written. Null — the default —
+    /// leaves it off, which is what keeps an ordinary render byte-identical to the game.
+    ///
+    /// </summary>
+    public sealed class RangeDisplay
+    {
+        /// <summary>
+        /// How a span is written. Null uses <see cref="TooltipEngine.DefaultRangeAnnotation"/>,
+        /// which gives ` [5-15]`. Return null or empty to suppress ONE span, which is how you show
+        /// ranges for some stats and not others.
+        /// </summary>
+        public Func<IReadOnlyList<RolledStatRange>, string> Format;
+
+        /// <summary>
+        /// The <see cref="ItemTooltipColor"/> to paint it, or -1 to inherit the line's. A marker
+        /// restoring the line's colour follows, so nothing after it is affected.
+        ///
+        /// The game's grey rather than -1, because a range is an annotation the game never draws
+        /// and inheriting the stat line's blue made it read as part of the line.
+        /// </summary>
+        public int Color = ItemTooltipColor.SocketedOrEthereal;
+    }
+
     public sealed class TooltipOptions
     {
         internal static readonly TooltipOptions Default = new TooltipOptions();
@@ -1381,64 +1441,39 @@ namespace D2ItemToolkit
         /// </summary>
         public int ShopMode;
 
-        /// <summary>
-        /// False renders the item as if nothing were socketed in it. The game has no such mode;
-        /// this exists so a caller can show what the base item is worth on its own.
-        /// </summary>
-        public bool IncludeSockets = true;
-
-        /// <summary>Appends the trailing quest-colour marker (0x48d1e2).</summary>
-        public bool QuestColorPrefix;
+        /// <summary>What the render does with the socket fillers.</summary>
+        public SocketMode Sockets = SocketMode.Merged;
 
         /// <summary>
-        /// Annotates each stat line with the span it could have rolled within — the same numbers
-        /// <see cref="TooltipEngine.Ranges(IUnit, System.Collections.Generic.IEnumerable{int})"/>
-        /// returns, written inline.
-        ///
-        /// The game has no such mode, so this makes the output deliberately NOT byte-identical.
-        /// Off by default, which is why every existing render is unaffected.
+        /// Non-null annotates each stat line with the span it could have rolled within — the same
+        /// numbers <see cref="TooltipEngine.Ranges"/> returns, written inline. The game has no such
+        /// mode, so this makes the output deliberately NOT byte-identical.
         ///
         /// Only lines that display one stat are annotated: every modifier, plus the Defense line.
-        /// A stat with no span, or one whose value could only ever have been what it is, is left
-        /// alone rather than annotated with a degenerate range.
         /// </summary>
-        public bool ShowRolledRanges;
+        public RangeDisplay Ranges;
 
         /// <summary>
-        /// How a span is written when <see cref="ShowRolledRanges"/> is on. Null uses
-        /// <see cref="TooltipEngine.DefaultRangeAnnotation"/>, which gives ` [5-15]` for a
-        /// one-number line and ` [(1-2)-(3-5)]` for a line printing two.
+        /// False renders a WORN set piece as though its socket fillers still applied.
         ///
-        /// The list holds one entry per number the LINE prints, in print order, so a min-max damage
-        /// line arrives as two. Return null or empty to suppress one — which is how you show ranges
-        /// for some stats and not others.
-        /// </summary>
-        public Func<IReadOnlyList<RolledStatRange>, string> RangeAnnotation;
-
-        /// <summary>
-        /// The <see cref="ItemTooltipColor"/> to paint the annotation, or -1 to inherit the line's.
-        /// A marker restoring the line's own colour follows the annotation, so nothing after it is
-        /// affected. Only meaningful for the coloured text — <see cref="Tooltip.Text"/> strips no
-        /// markers, so they appear there too, exactly as the game's own embedded markers do.
+        /// ITEM_RecalcAllEquippedItems 0x4c1350 detaches an equipped set item's stat list and
+        /// rebuilds it through ITEM_ProcessSetItemEquip; nothing re-applies the fillers, so the game
+        /// grants a worn Tal Rasha's Horadric Crest with an Um in it `All Resistances +15` rather
+        /// than 30. Reproducing that is the DEFAULT and stays the default.
         ///
-        /// Defaults to the game's grey rather than to -1: a range is an annotation the game never
-        /// draws, so inheriting the stat line's blue made it read as part of the line. Grey is what
-        /// the game itself uses for secondary text, and it is distinct from every quality colour.
-        /// </summary>
-        public int RangeColor = ItemTooltipColor.SocketedOrEthereal;
-
-        /// <summary>
-        /// Renders the item WITHOUT what its fillers contribute, then one block per filler below it,
-        /// so a reader can tell which gem or rune is responsible for what.
+        /// Turn it off when the question is "what is this item worth" rather than "what is it giving
+        /// right now" — a stash or mule view, where an item must not appear to lose its rune because
+        /// something equipped it. That is the position <see cref="TooltipEngine.MergedStats"/> takes
+        /// unconditionally; this is the same choice, made explicit for the render.
         ///
-        /// The game never draws this — it merges the fillers into the item's own block, which is
-        /// what <see cref="TooltipEngine.Render"/> does by default. Setting this implies
-        /// <see cref="IncludeSockets"/> false for the item's own lines; the fillers are not dropped
-        /// but moved. The blocks carry
-        /// <see cref="ItemTooltipSection.SocketContribution"/>, and combined with
-        /// <see cref="ShowRolledRanges"/> each filler's own spans appear against its own lines.
+        /// It affects the FILLERS only. Whether the piece is equipped still decides the full-set
+        /// block, the worn mask that lights the bonus tiers, and the piece list's colours, because
+        /// those are facts about the wearer rather than about the sockets.
+        ///
+        /// Like <see cref="SocketMode.Separated"/> and a non-null <see cref="Ranges"/>, false is a
+        /// deliberate departure from what the game draws.
         /// </summary>
-        public bool SeparateSocketContributions;
+        public bool ApplyWornSetDiscard = true;
 
         /// <summary>
         /// The CLIENT PLAYER, when that is a different unit from the viewer — i.e. a mercenary's
@@ -1466,17 +1501,16 @@ namespace D2ItemToolkit
             ItemTooltipKind kind,
             IReadOnlyList<ItemTooltipLine> lines,
             ItemTooltipComposer composer,
-            TooltipOptions options)
+            bool questColorPrefix)
         {
             Kind = kind;
             Lines = lines;
             _composer = composer;
 
-            // Snapshot, not a reference to the options object. Lines are composed eagerly, so
-            // every other knob is already baked in; leaving this one live meant mutating the
-            // caller's TooltipOptions AFTER Render changed what Text returned, and TypeScript
-            // captures it by value. A rendered tooltip should not change under the caller.
-            _questColorPrefix = options.QuestColorPrefix;
+            // DERIVED, not a knob. 0x48ec3f gates the marker on the items.txt `quest` byte of the
+            // item's own row (+0x12A) and excludes Wirt's Leg by code (0x48ec52, 'leg '); nothing
+            // the caller supplies reaches it.
+            _questColorPrefix = questColorPrefix;
         }
 
         /// <summary>Which of the game's tooltip builders produced this.</summary>

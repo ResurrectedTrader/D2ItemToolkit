@@ -53,8 +53,8 @@ namespace D2ItemToolkit.Tests
         private static string DefenseLine(Unit item)
         {
             var options = new TooltipOptions();
-            options.ShowRolledRanges = true;
-            options.RangeColor = -1;
+            options.Ranges = new RangeDisplay();
+            options.Ranges.Color = -1;
 
             return Engine.Render(item, null, options).Lines
                 .Select(l => System.Text.RegularExpressions.Regex
