@@ -556,10 +556,22 @@ namespace D2ItemToolkit
                 bool firstOfSection = true;
                 int sectionStat = StatOfSection(section);
 
-                foreach (string part in SplitLines(text))
+                var parts = new List<string>(SplitLines(text));
+                for (int at = 0; at < parts.Count; ++at)
                 {
+                    string part = parts[at];
+
                     var line = new ItemTooltipLine();
-                    line.Text = firstOfSection ? Annotated(part, 0, sectionStat, running) : part;
+                    line.Text = firstOfSection
+                        ? Annotated(part, 0, sectionStat, running)
+                        : part;
+
+                    // The item's own name is the TOP display row, which is the LAST part in append
+                    // order - a unique's section holds the base name first.
+                    if (at == parts.Count - 1 && section == ItemTooltipSection.ItemName)
+                    {
+                        line.Text = WithItemLevel(line.Text, running);
+                    }
                     line.Section = section;
                     line.Color = running;
                     line.StatId = firstOfSection ? sectionStat : -1;
@@ -766,10 +778,22 @@ namespace D2ItemToolkit
                 bool firstOfSection = true;
                 int sectionStat = StatOfSection(section);
 
-                foreach (string part in SplitLines(text))
+                var parts = new List<string>(SplitLines(text));
+                for (int at = 0; at < parts.Count; ++at)
                 {
+                    string part = parts[at];
+
                     var line = new ItemTooltipLine();
-                    line.Text = firstOfSection ? Annotated(part, 0, sectionStat, running) : part;
+                    line.Text = firstOfSection
+                        ? Annotated(part, 0, sectionStat, running)
+                        : part;
+
+                    // The item's own name is the TOP display row, which is the LAST part in append
+                    // order - a unique's section holds the base name first.
+                    if (at == parts.Count - 1 && section == ItemTooltipSection.ItemName)
+                    {
+                        line.Text = WithItemLevel(line.Text, running);
+                    }
                     line.Section = section;
                     line.Color = running;
                     line.StatId = firstOfSection ? sectionStat : -1;
@@ -1118,6 +1142,12 @@ namespace D2ItemToolkit
         internal int RangeColor = -1;
 
         /// <summary>
+        /// Appended to the item's NAME line, painted grey. Null draws nothing, which is the game's
+        /// own output - it has no item-level line.
+        /// </summary>
+        internal string ItemLevelSuffix;
+
+        /// <summary>
         /// The single stat a section displays, or -1. Only the Defense line qualifies: it shows one
         /// stat whose base genuinely rolls. Durability and the damage lines are excluded on purpose
         /// — their base columns do not roll, so a span there would be about the `dur%` or `dmg%`
@@ -1163,16 +1193,52 @@ namespace D2ItemToolkit
                 return part;
             }
 
-            string annotation = source(shownStats, layer);
-            if (string.IsNullOrEmpty(annotation))
+            return AppendInsideTerminator(part, source(shownStats, layer), lineColor, RangeColor);
+        }
+
+        /// <summary>
+        /// ` [ilvl 67]` after the item's name, or the part unchanged when no level is set. The game
+        /// never draws this; a record without one carries -1.
+        /// </summary>
+        private string WithItemLevel(string part, int lineColor)
+        {
+            if (ItemLevelSuffix == null)
             {
                 return part;
             }
 
-            if (RangeColor >= 0 && RangeColor != lineColor)
+            // The game pads a magic or rare name with a trailing space, so a separator of our own
+            // reads as a double space on most items.
+            string terminator = _sections.LineTerminator;
+            bool padded = (!string.IsNullOrEmpty(terminator)
+                    && part.EndsWith(terminator, StringComparison.Ordinal)
+                ? part.Substring(0, part.Length - terminator.Length)
+                : part).EndsWith(" ", StringComparison.Ordinal);
+
+            return AppendInsideTerminator(
+                part,
+                padded ? ItemLevelSuffix : " " + ItemLevelSuffix,
+                lineColor,
+                ItemTooltipColor.SocketedOrEthereal);
+        }
+
+        /// <summary>
+        /// Appends INSIDE the trailing terminator, since <see cref="SplitLines"/> keeps that on the
+        /// part it belongs to and appending after it would push the text onto the following line.
+        /// A marker restoring <paramref name="lineColor"/> follows, so nothing after is affected.
+        /// </summary>
+        private string AppendInsideTerminator(
+            string part, string addition, int lineColor, int color)
+        {
+            if (string.IsNullOrEmpty(addition))
             {
-                annotation = ItemTooltipColor.Marker + RangeColor.ToString(CultureInfo.InvariantCulture)
-                    + annotation
+                return part;
+            }
+
+            if (color >= 0 && color != lineColor)
+            {
+                addition = ItemTooltipColor.Marker + color.ToString(CultureInfo.InvariantCulture)
+                    + addition
                     + ItemTooltipColor.Marker + lineColor.ToString(CultureInfo.InvariantCulture);
             }
 
@@ -1181,10 +1247,10 @@ namespace D2ItemToolkit
                 && part.EndsWith(terminator, StringComparison.Ordinal))
             {
                 return part.Substring(0, part.Length - terminator.Length)
-                    + annotation + terminator;
+                    + addition + terminator;
             }
 
-            return part + annotation;
+            return part + addition;
         }
 
         private IEnumerable<string> SplitLines(string text, bool terminateTrailing = true)

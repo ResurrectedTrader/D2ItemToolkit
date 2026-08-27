@@ -423,6 +423,7 @@ export function renderRecord(
     // differ.
     payload.annotated = engine().render(unit, wearer, {
       ranges: { color: ItemTooltipColor.White },
+      showItemLevel: true,
     }).coloredText;
 
     payload.socketsSplit = engine().render(unit, wearer, {

@@ -208,6 +208,7 @@ the game** deliberately do not, and none of them changes the output unless you s
 | `ClientPlayer` | `null` | The character, when the viewer is a **mercenary** — see below |
 | `Sockets` | `Merged` | *`Excluded` and `Separated` go beyond the game.* What the render does with the socket fillers |
 | `Ranges` | `null` | *Beyond the game.* Non-null writes each stat's roll span inline. `Format` chooses the wording, `Color` the colour (grey by default, so a span reads as an annotation rather than as part of the line; -1 inherits the line's) |
+| `ShowItemLevel` | `false` | *Beyond the game.* Appends ` [ilvl 67]` after the item's name, in the same grey a span uses. Silently absent when the record carries no level (-1) |
 | `ApplyWornSetDiscard` | `true` | *False goes beyond the game.* Renders a worn set piece as though its fillers still applied — see below |
 
 `Sockets` is one value rather than several booleans because the alternatives are mutually

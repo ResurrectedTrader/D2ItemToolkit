@@ -157,6 +157,15 @@ export interface TooltipOptions {
   sockets?: SocketMode;
 
   /**
+   * Appends ` [ilvl 67]` after the item's name, in the same grey a range annotation uses.
+   *
+   * The game draws no such line, so this is off by default. Silently absent when the record carries
+   * no level: `itemLevel` is optional and -1 means absent, and the property handlers that need one
+   * report themselves through `ItemRollRanges.itemLevelDependent` rather than guessing.
+   */
+  showItemLevel?: boolean;
+
+  /**
    * False renders a WORN set piece as though its socket fillers still applied.
    *
    * ITEM_RecalcAllEquippedItems 0x4c1350 detaches an equipped set item's stat list and rebuilds it
@@ -479,6 +488,8 @@ export class TooltipEngine {
       this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
 
+    composed.composer.itemLevelSuffix = TooltipEngine.itemLevelSuffixOf(item, options);
+
     let lines: readonly ItemTooltipLine[];
     switch (composed.kind) {
       case ItemTooltipKind.IdentifiedSetItem:
@@ -688,6 +699,13 @@ export class TooltipEngine {
    * draws its own contribution alone. Handing both lines one dictionary gave the modifier the
    * section's span.
    */
+  /** ` [ilvl N]`, or null when the option is off or the record carries no level. */
+  private static itemLevelSuffixOf(item: Unit, options: TooltipOptions): string | null {
+    return (options.showItemLevel ?? false) && item.itemLevel >= 0
+      ? '[ilvl ' + String(item.itemLevel) + ']'
+      : null;
+  }
+
   private installRangeAnnotations(
     composer: ItemTooltipComposer,
     item: Unit,
@@ -826,6 +844,8 @@ export class TooltipEngine {
     if ((options.ranges ?? null) !== null) {
       this.installRangeAnnotations(composed.composer, item, options, includeSockets);
     }
+
+    composed.composer.itemLevelSuffix = TooltipEngine.itemLevelSuffixOf(item, options);
 
     let lines = this.setItemLines(item, viewer, composed, set);
 

@@ -545,11 +545,20 @@ export class ItemTooltipComposer {
       let firstOfSection = true;
       const sectionStat = ItemTooltipComposer.statOfSection(section);
 
-      for (const part of this.splitLines(text as string)) {
+      const sectionParts = [...this.splitLines(text as string)];
+      for (let at = 0; at < sectionParts.length; ++at) {
+        const part = sectionParts[at] as string;
+
         const line = new ItemTooltipLine();
         line.text = firstOfSection
           ? this.sectionAnnotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
           : part;
+
+        // The item's own name is the TOP display row, which is the LAST part in append order - a
+        // unique's section holds the base name first.
+        if (at === sectionParts.length - 1 && section === ItemTooltipSection.ItemName) {
+          line.text = this.withItemLevel(line.text, running);
+        }
         line.section = section;
         line.color = running;
         line.statId = firstOfSection ? sectionStat : -1;
@@ -748,11 +757,18 @@ export class ItemTooltipComposer {
       let firstOfSection = true;
       const sectionStat = ItemTooltipComposer.statOfSection(section);
 
-      for (const part of parts) {
+      for (let at = 0; at < parts.length; ++at) {
+        const part = parts[at] as string;
+
         const line = new ItemTooltipLine();
         line.text = firstOfSection
           ? this.sectionAnnotated(part, 0, sectionStat < 0 ? null : [sectionStat], running)
           : part;
+
+        // The item's own name is the TOP display row, which is the LAST part in append order.
+        if (at === parts.length - 1 && section === ItemTooltipSection.ItemName) {
+          line.text = this.withItemLevel(line.text, running);
+        }
         line.section = section;
         line.color = running;
         line.statId = firstOfSection ? sectionStat : -1;
@@ -1091,6 +1107,12 @@ export class ItemTooltipComposer {
   rangeColor = -1;
 
   /**
+   * Appended to the item's NAME line, painted grey. Null draws nothing, which is the game's own
+   * output - it has no item-level line.
+   */
+  itemLevelSuffix: string | null = null;
+
+  /**
    * The single stat a section displays, or -1. Only the Defense line qualifies: it shows one stat
    * whose base genuinely rolls. Durability and the damage lines are excluded on purpose — their
    * base columns do not roll, so a span there would be about the `dur%` or `dmg%` modifier and
@@ -1142,26 +1164,65 @@ export class ItemTooltipComposer {
       return part;
     }
 
-    let annotation = source(shownStats, layer);
-    if (annotation === null || annotation.length === 0) {
+    return this.appendInsideTerminator(part, source(shownStats, layer), lineColor, this.rangeColor);
+  }
+
+  /**
+   * ` [ilvl 67]` after the item's name, or the part unchanged when no level is set. The game never
+   * draws this; a record without one carries -1.
+   */
+  private withItemLevel(part: string, lineColor: number): string {
+    if (this.itemLevelSuffix === null) {
       return part;
     }
 
-    if (this.rangeColor >= 0 && this.rangeColor !== lineColor) {
-      annotation =
+    // The game pads a magic or rare name with a trailing space, so a separator of our own reads as
+    // a double space on most items.
+    const terminator = this.sections.lineTerminator ?? '';
+    const body =
+      terminator.length !== 0 && part.endsWith(terminator)
+        ? part.slice(0, part.length - terminator.length)
+        : part;
+
+    return this.appendInsideTerminator(
+      part,
+      body.endsWith(' ') ? this.itemLevelSuffix : ' ' + this.itemLevelSuffix,
+      lineColor,
+      ItemTooltipColor.SocketedOrEthereal,
+    );
+  }
+
+  /**
+   * Appends INSIDE the trailing terminator, since `splitLines` keeps that on the part it belongs to
+   * and appending after it would push the text onto the following line. A marker restoring
+   * `lineColor` follows, so nothing after is affected.
+   */
+  private appendInsideTerminator(
+    part: string,
+    addition: string | null,
+    lineColor: number,
+    color: number,
+  ): string {
+    if (addition === null || addition.length === 0) {
+      return part;
+    }
+
+    let text = addition;
+    if (color >= 0 && color !== lineColor) {
+      text =
         ItemTooltipColor.Marker +
-        String(this.rangeColor) +
-        annotation +
+        String(color) +
+        text +
         ItemTooltipColor.Marker +
         String(lineColor);
     }
 
     const terminator = this.sections.lineTerminator ?? '';
     if (terminator.length !== 0 && part.endsWith(terminator)) {
-      return part.slice(0, part.length - terminator.length) + annotation + terminator;
+      return part.slice(0, part.length - terminator.length) + text + terminator;
     }
 
-    return part + annotation;
+    return part + text;
   }
 
   private *splitLines(text: string, terminateTrailing = true): Generator<string> {

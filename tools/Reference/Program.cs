@@ -347,14 +347,19 @@ namespace D2ItemToolkit.Tools
         }
 
         /// <summary>
-        /// The item rendered with ShowRolledRanges on and a distinct RangeColor, so the composite
+        /// The item rendered with the range annotation on and a distinct colour, so the composite
         /// formatter, the decoded packed values and the marker wrapping are all compared.
+        ///
+        /// ShowItemLevel rides along: it shares the marker-wrapping helper, and the suffix has to
+        /// land on the item's own name rather than the base name below it, which is a display-order
+        /// question no other layer asks.
         /// </summary>
         private static string Annotated(Unit record, Unit wearer)
         {
             var options = new TooltipOptions();
             options.Ranges = new RangeDisplay();
             options.Ranges.Color = ItemTooltipColor.White;
+            options.ShowItemLevel = true;
 
             return Engine.Render(record, wearer, options).ColoredText;
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace D2ItemToolkit
 {
@@ -143,6 +144,8 @@ namespace D2ItemToolkit
             {
                 InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
+
+            composed.Composer.ItemLevelSuffix = ItemLevelSuffixOf(item, opts);
 
             IReadOnlyList<ItemTooltipLine> lines;
             switch (composed.Kind)
@@ -457,6 +460,14 @@ namespace D2ItemToolkit
         /// `+45 Defense` line draws its own contribution alone. Handing both lines one dictionary
         /// gave the modifier the section's span.
         /// </summary>
+        /// <summary>` [ilvl N]`, or null when the option is off or the record carries no level.</summary>
+        private static string ItemLevelSuffixOf(IUnit item, TooltipOptions options)
+        {
+            return options.ShowItemLevel && item.ItemLevel >= 0
+                ? "[ilvl " + item.ItemLevel.ToString(CultureInfo.InvariantCulture) + "]"
+                : null;
+        }
+
         private void InstallRangeAnnotations(
             ItemTooltipComposer composer, IUnit item, TooltipOptions options, bool includeSockets)
         {
@@ -686,6 +697,8 @@ namespace D2ItemToolkit
             {
                 InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
             }
+
+            composed.Composer.ItemLevelSuffix = ItemLevelSuffixOf(item, opts);
 
             IReadOnlyList<ItemTooltipLine> lines =
                 SetItemLines(item, viewer, composed, set);
@@ -1441,6 +1454,16 @@ namespace D2ItemToolkit
 
         /// <summary>What the render does with the socket fillers.</summary>
         public SocketMode Sockets = SocketMode.Merged;
+
+        /// <summary>
+        /// Appends ` [ilvl 67]` after the item's name, in the same grey a range annotation uses.
+        ///
+        /// The game draws no such line, so this is off by default. Silently absent when the record
+        /// carries no level: `itemLevel` is optional and -1 means absent, and the property handlers
+        /// that need one report themselves through <see cref="ItemRollRanges.ItemLevelDependent"/>
+        /// rather than guessing.
+        /// </summary>
+        public bool ShowItemLevel;
 
         /// <summary>
         /// Non-null annotates each stat line with the span it could have rolled within — the same
