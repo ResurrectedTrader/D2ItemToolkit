@@ -81,6 +81,10 @@ describe('the two implementations agree on the adversarial corpus', () => {
         // hostile corpus is exactly where an int32 overflow or an ordering difference in the merge
         // would show up, so it is the corpus this layer most wants.
         'mergedStats',
+        // The damage NUMBERS. This corpus is where they most want comparing: the `max = min + 1`
+        // clamp is int32, so at int.MaxValue it wraps to int.MinValue and does NOT fire (0x485931),
+        // and a hostile record is the only thing that reaches that.
+        'damage',
         'error',
       ] as const) {
         const a = JSON.stringify(want[layer] ?? null);

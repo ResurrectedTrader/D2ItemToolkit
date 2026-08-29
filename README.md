@@ -150,6 +150,7 @@ IUnit (viewer) ────┘                   ├── Breakdown         →
                                        ├── RangesForViewer   → the same, plus the viewer's set tiers
                                        ├── MergedStats       → what the stats add up to
                                        ├── SocketFillerStats → what one gem or rune grants its host
+                                       ├── Damage            → the weapon damage numbers
                                        ├── Appearance        → inventory sprite and palette shift
                                        ├── Requirements      → strength / dexterity / level / class
                                        └── ClassIdsOfType    → every classId under a type code
@@ -553,6 +554,42 @@ back. Note the slot comes from `gemapplytype`, and a row that takes no sockets s
 so a non-empty result is not evidence that the host is socketable — ask `Items` for `gemsockets` if
 that is the question.
 
+### Damage — the weapon numbers, as numbers
+
+The same values the WeaponDamage line writes, before they are written.
+
+```csharp
+ItemDamage damage = TooltipEngine.Embedded.Damage(weapon, player);
+
+foreach (ItemDamageRange line in damage.Lines)
+{
+    Console.WriteLine($"{line.Kind}: {line.Min} to {line.Max} (modified: {line.Modified})");
+}
+```
+
+`Lines` is in display order and holds one entry per line the tooltip draws, so it is usually one —
+`OneHand` or `TwoHand`, whichever the item's `2handed` column selects. Three things make it more:
+a throwable weapon adds a `Throw` line **above** its own, a throwing potion replaces everything
+with a single `ThrowingPotion` line read from missiles.txt rather than from any stat, and a
+**Barbarian** holding a `1or2handed` weapon gets both a one-hand and a two-hand line. That last is
+the only reason `Damage` takes a viewer at all; pass null and you get the single line.
+
+`Modified` is what paints the numbers colour 3 — the merged value exceeding the base one at either
+end, or a by-time damage stat contributing. `Max` is the number **as drawn**, so the single-line
+path's `max = min + 1` clamp has already been applied and the dual-wield path's has not, which is
+why a Barbarian can be shown a line whose two ends are equal.
+
+An empty `Lines` means no damage line at all: anything that is not a weapon, and a weapon whose own
+stat 21 or 22 is *negative* — zero passes, and comes out as `0 to 1`.
+
+**What this is not.** Smite and Kick are a different writer reading items.txt bytes rather than
+stats, and are not here. Neither is elemental damage, which the game draws as ordinary modifier
+lines. And three parts of `INV_CalcWeaponDamageRange` are not reproduced — the max is read straight
+off the item rather than as `MAX(mergedMax, mergedMin)` plus stats 272/273, and the wielder's own
+damage stats are not merged in. Whether any of those three moves a shipped item is **uncounted**.
+Treat these as "what the tooltip shows", which they exactly are, rather than as "what the game
+computes".
+
 ### Appearance — drawing the item in a grid
 
 ```csharp
@@ -731,11 +768,17 @@ Correctness here means byte-identical to the original, including its oddities �
 inconsistent, this reproduces the inconsistency rather than tidying it up. Every behaviour is
 traced to the instruction that causes it, and the code cites the address.
 
+Two documented departures, both deliberate and both stated where they are seen: a worn set piece
+keeps its socket fillers where the game discards them ([the worn set piece
+bug](#the-worn-set-piece-bug)), and three parts of `INV_CalcWeaponDamageRange` are not reproduced
+(see [Damage](#damage--the-weapon-numbers-as-numbers)). The second is **untraced rather than
+chosen**, and its reachability is uncounted.
+
 | | |
 |---|---|
-| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **939** |
+| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **941** |
 | hostile producer-legal inputs, both engines agreeing | **11,972** |
-| tests | **1066** C# / **1082** TypeScript |
+| tests | **1083** C# / **1101** TypeScript |
 | captured client tooltips reproduced byte-identically | **64 / 64** |
 
 The capture set is a private `captures.db` of real client tooltips and is not part of this

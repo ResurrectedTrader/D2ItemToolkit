@@ -154,6 +154,11 @@ namespace D2ItemToolkit.Tools
                 // range colour and the socket-block layout are all outside the differential —
                 // exercised only by hand-written tests on each side, which cannot catch the two
                 // implementations agreeing to differ.
+                // The damage NUMBERS, which the rendered string only carries as text. Both engines
+                // route to their damage values separately from the writer, so this is what keeps
+                // the two routings comparable rather than only each comparable to its own string.
+                payload.Append(", \"damage\": ").Append(PackDamage(Engine.Damage(record, wearer)));
+
                 payload.Append(", \"annotated\": ").Append(Quote(Annotated(record, wearer)));
                 payload.Append(", \"socketsSplit\": ").Append(Quote(SocketsSplit(record, wearer)));
                 payload.Append(", \"breakdown\": ").Append(Breakdown(record, wearer));
@@ -404,6 +409,20 @@ namespace D2ItemToolkit.Tools
         }
 
         /// <summary>The merged-stat totals, flags included, so both engines agree on all of it.</summary>
+        private static string PackDamage(ItemDamage damage)
+        {
+            var lines = new List<string>();
+            foreach (ItemDamageRange line in damage.Lines)
+            {
+                lines.Add("{\"kind\": \"" + line.Kind
+                    + "\", \"min\": " + line.Min
+                    + ", \"max\": " + line.Max
+                    + ", \"modified\": " + (line.Modified ? "true" : "false") + "}");
+            }
+
+            return "[" + string.Join(", ", lines) + "]";
+        }
+
         private static string PackMergedStats(ItemMergedStats merged)
         {
             var stats = new List<string>();

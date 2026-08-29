@@ -37,6 +37,7 @@ interface ExpectedCase {
   colored?: string;
   ranges?: PackedRanges;
   mergedStats?: PackedMergedStats;
+  damage?: PackedDamage[];
   annotated?: string;
   socketsSplit?: string;
   breakdown?: PackedBreakdown;
@@ -73,6 +74,14 @@ interface PackedRanges {
 interface PackedMergedStats {
   stats: { stat: number; layer: number; value: number }[];
   excludedPackedStats: number[];
+}
+
+/** One damage line, as `PackDamage` in tools/Reference/Program.cs emits it. */
+interface PackedDamage {
+  kind: string;
+  min: number;
+  max: number;
+  modified: boolean;
 }
 
 /** The four breakdown buckets as text, as `Breakdown` in tools/Reference/Program.cs emits them. */
@@ -299,6 +308,35 @@ describe('corpus', () => {
     expect(breakdowns.some(b => b.sockets.some(l => l.includes('[')))).toBe(true);
   });
 
+  it('reaches every damage line kind, and both sides of the dual-wield arm', () => {
+    // The damage layer compares numbers, so it passes vacuously on any case that draws no damage
+    // line — and 709 of these draw none. Each kind needs a case or its half of the routing is
+    // outside the comparison.
+    const lines = expected.flatMap(c => c.damage ?? []);
+    const kinds = new Set(lines.map(l => l.kind));
+
+    for (const kind of ['OneHand', 'TwoHand', 'Throw', 'ThrowingPotion']) {
+      expect(kinds, kind + ' unreached').toContain(kind);
+    }
+
+    // pModified drives the colour, so a corpus where it is never set would compare only its
+    // cleared arm.
+    expect(lines.some(l => l.modified)).toBe(true);
+
+    const named = new Map(expected.map(c => [c.name, c]));
+    const barbarian = named.get('dualwield-bsw-c4')?.damage ?? [];
+    const paladin = named.get('dualwield-bsw-c3')?.damage ?? [];
+
+    // THE discriminating pair, and the reason it exists: the same Bastard Sword draws two lines
+    // for a Barbarian and one for anybody else (0x62a1e0). The four numbers are pairwise distinct,
+    // so a swapped one-hand/two-hand pair cannot read as correct.
+    expect(barbarian.map(l => [l.kind, l.min, l.max])).toEqual([
+      ['OneHand', 10, 25],
+      ['TwoHand', 20, 40],
+    ]);
+    expect(paladin.map(l => [l.kind, l.min, l.max])).toEqual([['TwoHand', 20, 40]]);
+  });
+
   it('reaches a socketed set piece both worn and carried', () => {
     // The corpus has to hold a worn socketed SET item, because that is the one shape the game
     // treats specially (0x4c15fd) and so the one shape where an engine could plausibly grow a
@@ -408,6 +446,9 @@ describe.skipIf(!engineReady)('the two implementations agree', () => {
         // The merged TOTALS. Nothing above reaches them: they fold the gems.txt synthesis and
         // op 13 into one view, which no render path does.
         'mergedStats',
+        // The damage NUMBERS. Both engines route to their damage values separately from the
+        // writer, so comparing the rendered string alone would let the two routings drift.
+        'damage',
         // The two opt-in render modes. Their formatter, colour wrapping and block layout are
         // otherwise covered only by hand-written tests on each side, which cannot catch the two
         // implementations agreeing to differ.

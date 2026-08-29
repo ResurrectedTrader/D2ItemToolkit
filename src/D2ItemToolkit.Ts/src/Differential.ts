@@ -58,6 +58,7 @@ export interface RenderedRecord {
   colored?: string;
   ranges?: PackedRanges;
   mergedStats?: PackedMergedStats;
+  damage?: PackedDamage[];
   annotated?: string;
   socketsSplit?: string;
   breakdown?: PackedBreakdown;
@@ -94,6 +95,14 @@ interface PackedRanges {
 interface PackedMergedStats {
   stats: { stat: number; layer: number; value: number }[];
   excludedPackedStats: number[];
+}
+
+/** One damage line, as `PackDamage` in tools/Reference/Program.cs emits it. */
+interface PackedDamage {
+  kind: string;
+  min: number;
+  max: number;
+  modified: boolean;
 }
 
 /** The four breakdown buckets as text, matching `Breakdown` in tools/Reference/Program.cs. */
@@ -419,6 +428,10 @@ export function renderRecord(
     // colour and the socket-block layout are all outside the differential — exercised only by
     // hand-written tests on each side, which cannot catch the two implementations agreeing to
     // differ.
+    payload.damage = engine()
+      .damage(unit, wearer)
+      .lines.map(l => ({ kind: String(l.kind), min: l.min, max: l.max, modified: l.modified }));
+
     payload.annotated = engine().render(unit, wearer, {
       ranges: { color: ItemTooltipColor.White },
       showItemLevel: true,

@@ -630,11 +630,12 @@ namespace D2ItemToolkit
         // 0x485410. Two-handed weapons use stats 23/24 and label 3466; one-handed use 21/22 and
         // 3465. A throwable weapon also gets a throw line (stats 159/160).
         //
-        // NOT faithful here: the colour 3 the asm puts on the MIN number when
-        // INV_CalcWeaponDamageRange reports the value as modified (0x4856f5 / 0x485818 / 0x485984).
-        // We do not compute that flag, so no inner marker is emitted. Nor is the section gate exact —
-        // LoadItemDesc requires GetTxtMinDamage/GetTxtMaxDamage >= 0 (0x48e704 / 0x48e716), where zero
-        // PASSES, while DamageLine returns nothing when both stats are zero.
+        // OPEN, and UNTRACED. INV_CalcWeaponDamageRange 0x485240 does three things this does not:
+        // it takes *pMax as MAX(mergedMax, mergedMin), then adds stat 272 and a percent of the
+        // running total from stat 273, and it reads the merged pair off the UNIT after temporarily
+        // attaching the item to it (STATLIST_SetItemStatActive 0x4852a1, restored at 0x4852cb /
+        // 0x4852d8). Here the pair is read straight off the item, and 272/273 only ever feed
+        // DamageIsModified. Whether any of the three moves a shipped item is uncounted.
         private string WeaponDamage()
         {
             if (!_types.IsOfType(PrimaryType(), SecondaryType(), _types.Row("weap")))
@@ -676,6 +677,80 @@ namespace D2ItemToolkit
             }
 
             return text;
+        }
+
+        /// <summary>
+        /// The same routing <see cref="WeaponDamage"/> performs, collecting numbers instead of
+        /// writing text. Both walk the same gates and the same
+        /// <see cref="DamageValues"/>, and a test asserts the numbers here are the numbers in the
+        /// rendered line, so the two cannot drift apart silently.
+        /// </summary>
+        internal List<ItemDamageRange> WeaponDamageValues()
+        {
+            var lines = new List<ItemDamageRange>();
+
+            if (!_types.IsOfType(PrimaryType(), SecondaryType(), _types.Row("weap")))
+            {
+                return lines;
+            }
+
+            // 0x485459 takes the tpot arm outright, so such an item has no other damage line.
+            if (_types.IsOfType(PrimaryType(), SecondaryType(), _types.Row("tpot")))
+            {
+                MissileThrowDamage potion;
+                if (_missiles.TryGetThrowDamage(
+                        _items.GetInt(_item.ClassId, "missiletype"), out potion))
+                {
+                    lines.Add(new ItemDamageRange(
+                        ItemDamageKind.ThrowingPotion, potion.Min, potion.Max, false));
+                }
+
+                return lines;
+            }
+
+            if (Stat(StatMinDamage) < 0 || Stat(StatMaxDamage) < 0)
+            {
+                return lines;
+            }
+
+            // DISPLAY order, which is the reverse of the order the buffers are written in. The
+            // throw line is appended last (0x485ab6) so it ends up on TOP; the dual-wield pair is
+            // written two-hand first (0x4856a2 before 0x4857c5) so ONE-HAND ends up above it.
+            if (IsThrowable())
+            {
+                lines.Add(DamageValues(
+                    ItemDamageKind.Throw, StatThrowMinDamage, StatThrowMaxDamage, false, true));
+            }
+
+            if (BarbarianDualWield())
+            {
+                lines.Add(DamageValues(
+                    ItemDamageKind.OneHand, StatMinDamage, StatMaxDamage, false, false));
+                lines.Add(DamageValues(
+                    ItemDamageKind.TwoHand,
+                    StatSecondaryMinDamage, StatSecondaryMaxDamage, false, false));
+
+                return lines;
+            }
+
+            bool twoHanded = _items.GetInt(_item.ClassId, "2handed") != 0;
+
+            lines.Add(DamageValues(
+                twoHanded ? ItemDamageKind.TwoHand : ItemDamageKind.OneHand,
+                twoHanded ? StatSecondaryMinDamage : StatMinDamage,
+                twoHanded ? StatSecondaryMaxDamage : StatMaxDamage,
+                true,
+                false));
+
+            return lines;
+        }
+
+        private static ItemDamageKind KindOf(int labelId)
+        {
+            if (labelId == SectionStringIds.TwoHandDamage) return ItemDamageKind.TwoHand;
+            if (labelId == SectionStringIds.ThrowDamage) return ItemDamageKind.Throw;
+
+            return ItemDamageKind.OneHand;
         }
 
         /// <summary>
@@ -757,8 +832,13 @@ namespace D2ItemToolkit
                 true);
         }
 
-        private string DamageLine(
-            int labelId, int minStat, int maxStat, bool clampMax, bool throwShape = false)
+        /// <summary>
+        /// One line's numbers, with no formatting. <see cref="DamageLine"/> writes these and
+        /// <see cref="TooltipEngine.Damage"/> returns them, so the string and the API cannot
+        /// disagree about a value.
+        /// </summary>
+        private ItemDamageRange DamageValues(
+            ItemDamageKind kind, int minStat, int maxStat, bool clampMax, bool throwShape)
         {
             int min = Stat(minStat);
             int max = Stat(maxStat);
@@ -769,6 +849,22 @@ namespace D2ItemToolkit
                 max = min + 1;
             }
 
+            bool modified = throwShape
+                ? ThrowDamageIsModified(minStat, maxStat)
+                : DamageIsModified(minStat, maxStat);
+
+            return new ItemDamageRange(kind, min, max, modified);
+        }
+
+        private string DamageLine(
+            int labelId, int minStat, int maxStat, bool clampMax, bool throwShape = false)
+        {
+            ItemDamageRange values = DamageValues(
+                KindOf(labelId), minStat, maxStat, clampMax, throwShape);
+
+            int min = values.Min;
+            int max = values.Max;
+
             // The throw block does NOT share the 1H/2H emission shape. 0x485a97 puts an explicit
             // colour 0 on the label, and 0x485afd / 0x485b7c mark BOTH numbers rather than relying
             // on the marker staying in force from the min. Its flag is also pre-seeded at
@@ -776,8 +872,7 @@ namespace D2ItemToolkit
             // where the 1H/2H flag is zeroed at 0x485662 and never gets those terms.
             if (throwShape)
             {
-                string throwMarker = ItemTooltipColor.Marker
-                    + (ThrowDamageIsModified(minStat, maxStat) ? "3" : "0");
+                string throwMarker = ItemTooltipColor.Marker + (values.Modified ? "3" : "0");
 
                 return ItemTooltipColor.Marker + "0" + Str(labelId) + Space
                        + throwMarker + min + Space + Str(SectionStringIds.To) + Space
@@ -789,9 +884,7 @@ namespace D2ItemToolkit
             // before the max, so the max never carries a marker of its own. But a colour code stays in
             // force until the next one, so the visible result is the LABEL in the section colour and
             // the whole numeric run — min, "to" and max — in colour 3.
-            string marker = DamageIsModified(minStat, maxStat)
-                ? ItemTooltipColor.Marker + "3"
-                : string.Empty;
+            string marker = values.Modified ? ItemTooltipColor.Marker + "3" : string.Empty;
 
             return Str(labelId) + Space + marker + min + Space + Str(SectionStringIds.To)
                    + Space + max + Terminator;

@@ -36,6 +36,7 @@ import {
   type RolledStatRange,
 } from '../Stats/RolledRangeReconstructor.js';
 import type { ItemMergedStats, MergedStat, MergedStatsOptions } from '../Stats/MergedStats.js';
+import type { ItemDamage } from './ItemDamage.js';
 import { SetItemTooltipBuilder, popCount, type SetItemTooltipInput } from './SetItemTooltip.js';
 import { NotSupportedException } from '../Types.js';
 
@@ -1122,6 +1123,25 @@ export class TooltipEngine {
    */
   rangesForViewer(item: Unit, viewer: Unit | null): ItemRollRanges {
     return this.ranges(item, this.earnedSetIdsOf(viewer));
+  }
+
+  /**
+   * The weapon-damage numbers the tooltip would draw, as numbers rather than as a formatted line.
+   * Socket fillers are folded in, exactly as `render` folds them.
+   *
+   * The viewer matters for one thing only: BARBARIAN_CheckItemData_b1or2Handed_isTrue (0x62a1e0)
+   * gives a Barbarian holding a `1or2handed` weapon BOTH a two-hand and a one-hand line, where
+   * everyone else gets one. Pass null and you get the single line.
+   *
+   * Empty `lines` means the item draws no damage line — see `ItemDamage` for what that covers, and
+   * for the three parts of INV_CalcWeaponDamageRange this does not reproduce.
+   */
+  damage(item: Unit, viewer: Unit | null = null): ItemDamage {
+    requireUnit(item, 'item');
+
+    const composed = this.compose(item, viewer, {}, true);
+
+    return { lines: composed.sections.weaponDamageValues() };
   }
 
   /**

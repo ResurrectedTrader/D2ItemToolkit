@@ -252,6 +252,20 @@ namespace D2ItemToolkit.Tools
                 }
             }
 
+            // The Barbarian dual-wield arm (BARBARIAN_CheckItemData_b1or2Handed_isTrue 0x62a1e0),
+            // which draws BOTH a one-hand and a two-hand line where every other class draws one.
+            // A Bastard Sword carries `1or2handed` and `2handed` together, which is what the arm
+            // is for. Only one case reached this incidentally, with a 0-to-0 two-hand line, so
+            // neither the second line's VALUES nor the order of the two was policed. The four
+            // numbers are pairwise distinct so a swapped pair cannot read as correct.
+            foreach (int playerClass in new[] { 4, 3 })
+            {
+                Add(cases, "dualwield-bsw-c" + playerClass, "bsw", 2, 16,
+                    "{ \"id\": 21, \"value\": 10 }, { \"id\": 22, \"value\": 25 }, "
+                    + "{ \"id\": 23, \"value\": 20 }, { \"id\": 24, \"value\": 40 }",
+                    string.Empty, Player(playerClass, 40));
+            }
+
             // Smite is Paladin-and-shield; kick is Assassin-and-boots. Voodoo heads are shields
             // that REFUSE smite because they are class-restricted to Necromancer.
             foreach (string code in new[] { "lrg", "pa1", "ne1", "ne9", "vbt", "xtb" })

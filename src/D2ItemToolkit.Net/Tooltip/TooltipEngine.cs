@@ -867,6 +867,27 @@ namespace D2ItemToolkit
         /// gear on a wearer — and this reads it as the first, so handing it a PLAYER folds every
         /// carried item in as though it were socketed.
         /// </remarks>
+        /// <summary>
+        /// The weapon-damage numbers the tooltip would draw, as numbers rather than as a formatted
+        /// line. Socket fillers are folded in, exactly as <see cref="Render"/> folds them.
+        ///
+        /// The viewer matters for one thing only: BARBARIAN_CheckItemData_b1or2Handed_isTrue
+        /// (0x62a1e0) gives a Barbarian holding a `1or2handed` weapon BOTH a two-hand and a
+        /// one-hand line, where everyone else gets one. Pass null and you get the single line.
+        ///
+        /// Empty <see cref="ItemDamage.Lines"/> means the item draws no damage line — see there for
+        /// what that covers, and for the three parts of INV_CalcWeaponDamageRange this does not
+        /// reproduce.
+        /// </summary>
+        public ItemDamage Damage(IUnit item, IUnit viewer = null)
+        {
+            if (item == null) throw new ArgumentNullException("item");
+
+            Composed composed = Compose(item, viewer, TooltipOptions.Default, true);
+
+            return new ItemDamage(composed.Sections.WeaponDamageValues());
+        }
+
         public ItemMergedStats MergedStats(IUnit item, MergedStatsOptions options = null)
         {
             if (item == null) throw new ArgumentNullException("item");

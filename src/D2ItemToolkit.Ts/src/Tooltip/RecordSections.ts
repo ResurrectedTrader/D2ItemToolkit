@@ -5,6 +5,7 @@ import {
   type ItemDescriptionLine,
   ItemDescriptionGenerator,
 } from '../Description/ItemDescription.js';
+import { ItemDamageKind, type ItemDamageRange } from './ItemDamage.js';
 import { ItemNameBuilder } from './ItemNameBuilder.js';
 import {
   type ItemIdentity,
@@ -751,11 +752,12 @@ export class RecordSections implements IItemTooltipSections {
   // 0x485410. Two-handed weapons use stats 23/24 and label 3466; one-handed use 21/22 and
   // 3465. A throwable weapon also gets a throw line (stats 159/160).
   //
-  // NOT faithful here: the colour 3 the asm puts on the MIN number when
-  // INV_CalcWeaponDamageRange reports the value as modified (0x4856f5 / 0x485818 / 0x485984).
-  // We do not compute that flag, so no inner marker is emitted. Nor is the section gate exact —
-  // LoadItemDesc requires GetTxtMinDamage/GetTxtMaxDamage >= 0 (0x48e704 / 0x48e716), where zero
-  // PASSES, while DamageLine returns nothing when both stats are zero.
+  // OPEN, and UNTRACED. INV_CalcWeaponDamageRange 0x485240 does three things this does not: it
+  // takes *pMax as MAX(mergedMax, mergedMin), then adds stat 272 and a percent of the running
+  // total from stat 273, and it reads the merged pair off the UNIT after temporarily attaching the
+  // item to it (STATLIST_SetItemStatActive 0x4852a1, restored at 0x4852cb / 0x4852d8). Here the
+  // pair is read straight off the item, and 272/273 only ever feed damageIsModified. Whether any
+  // of the three moves a shipped item is uncounted.
   private weaponDamage(): string | null {
     if (!this.types.isOfType(this.primaryType(), this.secondaryType(), this.types.row('weap'))) {
       return null;
@@ -878,13 +880,17 @@ export class RecordSections implements IItemTooltipSections {
     );
   }
 
-  private damageLine(
-    labelId: number,
+  /**
+   * One line's numbers, with no formatting. `damageLine` writes these and `TooltipEngine.damage`
+   * returns them, so the string and the API cannot disagree about a value.
+   */
+  private damageValues(
+    kind: ItemDamageKind,
     minStat: number,
     maxStat: number,
     clampMax: boolean,
-    throwShape = false,
-  ): string | null {
+    throwShape: boolean,
+  ): ItemDamageRange {
     const min = this.stat(minStat);
     let max = this.stat(maxStat);
 
@@ -895,14 +901,130 @@ export class RecordSections implements IItemTooltipSections {
       max = (min + 1) | 0;
     }
 
+    const modified = throwShape
+      ? this.throwDamageIsModified(minStat, maxStat)
+      : this.damageIsModified(minStat, maxStat);
+
+    return { kind, min, max, modified };
+  }
+
+  /**
+   * The same routing `weaponDamage` performs, collecting numbers instead of writing text. Both walk
+   * the same gates and the same `damageValues`, and a test asserts the numbers here are the numbers
+   * in the rendered line, so the two cannot drift apart silently.
+   */
+  weaponDamageValues(): ItemDamageRange[] {
+    const lines: ItemDamageRange[] = [];
+
+    if (!this.types.isOfType(this.primaryType(), this.secondaryType(), this.types.row('weap'))) {
+      return lines;
+    }
+
+    // 0x485459 takes the tpot arm outright, so such an item has no other damage line.
+    if (this.types.isOfType(this.primaryType(), this.secondaryType(), this.types.row('tpot'))) {
+      const potion = this.missiles.tryGetThrowDamage(
+        this.items.getInt(this.item.classId, 'missiletype'),
+      );
+
+      if (potion !== null) {
+        lines.push({
+          kind: ItemDamageKind.ThrowingPotion,
+          min: potion.min,
+          max: potion.max,
+          modified: false,
+        });
+      }
+
+      return lines;
+    }
+
+    if (this.stat(StatMinDamage) < 0 || this.stat(StatMaxDamage) < 0) {
+      return lines;
+    }
+
+    // DISPLAY order, which is the reverse of the order the buffers are written in. The throw line
+    // is appended last (0x485ab6) so it ends up on TOP; the dual-wield pair is written two-hand
+    // first (0x4856a2 before 0x4857c5) so ONE-HAND ends up above it.
+    if (this.isThrowable()) {
+      lines.push(
+        this.damageValues(
+          ItemDamageKind.Throw,
+          StatThrowMinDamage,
+          StatThrowMaxDamage,
+          false,
+          true,
+        ),
+      );
+    }
+
+    if (this.barbarianDualWield()) {
+      lines.push(
+        this.damageValues(ItemDamageKind.OneHand, StatMinDamage, StatMaxDamage, false, false),
+      );
+      lines.push(
+        this.damageValues(
+          ItemDamageKind.TwoHand,
+          StatSecondaryMinDamage,
+          StatSecondaryMaxDamage,
+          false,
+          false,
+        ),
+      );
+
+      return lines;
+    }
+
+    const twoHanded = this.items.getInt(this.item.classId, '2handed') !== 0;
+
+    lines.push(
+      this.damageValues(
+        twoHanded ? ItemDamageKind.TwoHand : ItemDamageKind.OneHand,
+        twoHanded ? StatSecondaryMinDamage : StatMinDamage,
+        twoHanded ? StatSecondaryMaxDamage : StatMaxDamage,
+        true,
+        false,
+      ),
+    );
+
+    return lines;
+  }
+
+  private static kindOf(labelId: number): ItemDamageKind {
+    if (labelId === SectionStringIds.TwoHandDamage) {
+      return ItemDamageKind.TwoHand;
+    }
+    if (labelId === SectionStringIds.ThrowDamage) {
+      return ItemDamageKind.Throw;
+    }
+
+    return ItemDamageKind.OneHand;
+  }
+
+  private damageLine(
+    labelId: number,
+    minStat: number,
+    maxStat: number,
+    clampMax: boolean,
+    throwShape = false,
+  ): string | null {
+    const values = this.damageValues(
+      RecordSections.kindOf(labelId),
+      minStat,
+      maxStat,
+      clampMax,
+      throwShape,
+    );
+
+    const min = values.min;
+    const max = values.max;
+
     // The throw block does NOT share the 1H/2H emission shape. 0x485a97 puts an explicit
     // colour 0 on the label, and 0x485afd / 0x485b7c mark BOTH numbers rather than relying
     // on the marker staying in force from the min. Its flag is also pre-seeded at
     // 0x485a14-0x485a54 from STATLIST_GetStatBonusFromLists on stats 18, 17, 159 and 160,
     // where the 1H/2H flag is zeroed at 0x485662 and never gets those terms.
     if (throwShape) {
-      const throwMarker =
-        ItemTooltipColor.Marker + (this.throwDamageIsModified(minStat, maxStat) ? '3' : '0');
+      const throwMarker = ItemTooltipColor.Marker + (values.modified ? '3' : '0');
 
       return (
         ItemTooltipColor.Marker +
@@ -925,7 +1047,7 @@ export class RecordSections implements IItemTooltipSections {
     // before the max, so the max never carries a marker of its own. But a colour code stays in
     // force until the next one, so the visible result is the LABEL in the section colour and
     // the whole numeric run — min, "to" and max — in colour 3.
-    const marker = this.damageIsModified(minStat, maxStat) ? ItemTooltipColor.Marker + '3' : '';
+    const marker = values.modified ? ItemTooltipColor.Marker + '3' : '';
 
     return (
       this.str(labelId) +
