@@ -198,8 +198,9 @@ In TypeScript `line.text` is typed `string | null`, so narrow it before use.
 
 ### Options
 
-Every knob on `TooltipOptions`. The defaults reproduce the game exactly; the three marked **beyond
-the game** deliberately do not, and none of them changes the output unless you set it.
+Every knob on `TooltipOptions`. The defaults reproduce the game exactly, with [one documented
+exception](#the-worn-set-piece-bug); the three marked **beyond the game** deliberately do not, and
+none of them changes the output unless you set it.
 
 | option | default | what it does |
 |---|---|---|
@@ -209,7 +210,6 @@ the game** deliberately do not, and none of them changes the output unless you s
 | `Sockets` | `Merged` | *`Excluded` and `Separated` go beyond the game.* What the render does with the socket fillers |
 | `Ranges` | `null` | *Beyond the game.* Non-null writes each stat's roll span inline. `Format` chooses the wording, `Color` the colour (grey by default, so a span reads as an annotation rather than as part of the line; -1 inherits the line's) |
 | `ShowItemLevel` | `false` | *Beyond the game.* Appends ` [ilvl 67]` after the item's name, in the same grey a span uses. Silently absent when the record carries no level (-1) |
-| `ApplyWornSetDiscard` | `true` | *False goes beyond the game.* Renders a worn set piece as though its fillers still applied — see below |
 
 `Sockets` is one value rather than several booleans because the alternatives are mutually
 exclusive: `Merged` is what the game draws, `Excluded` renders the item as if nothing were socketed
@@ -468,7 +468,6 @@ foreach (MergedStat stat in merged.Stats)
 | member | what it gives you |
 |---|---|
 | `Stats` | one entry per non-zero `(StatId, Layer)`, ordered by LAYER then stat |
-| `FillersIgnoredBecauseWorn` | true when these totals deliberately differ from `Render` — see below |
 | `ExcludedPackedStats` | stat ids left out because their value is a packed encoding |
 
 Values are **raw**, in the encoding the record carries: `+60 to Life` comes back as `60 << 8`,
@@ -489,17 +488,55 @@ Set **bonuses** are excluded by default, the same rule `Ranges` follows; `Includ
 in the tiers the record already carries. Pass an **item**, not a wearer: `IUnit.Items` carries two
 relations, and this reads it as socket fillers.
 
-#### Where it deliberately disagrees with Render
+### The worn set piece bug
 
-An equipped **set** piece is the one case. `ITEM_RecalcAllEquippedItems` detaches a worn set item's
-stat list and rebuilds it without re-applying the fillers, so the game really does grant a worn Tal
-Rasha's Horadric Crest with an Um in it `All Resistances +15` rather than 30 — and `Render`
-reproduces that.
+**This is the one place the library deliberately does not reproduce the game.** Everything else here
+is byte-exact, oddities included; this one is not, and the reason is that the behaviour being
+reproduced is a bug in Diablo II that costs the player stats.
 
-`MergedStats` ignores the discard, because the useful question about a stored item is what it
-*would* give: an item must not drop out of a search because something equipped it. When the two
-views disagree, `FillersIgnoredBecauseWorn` says so, so a caller can flag it rather than look wrong.
-If you want the render to agree, set `ApplyWornSetDiscard = false`.
+#### What the game does
+
+`ITEM_RecalcAllEquippedItems` (`0x4c1350`) ends with a loop over the eleven body slots. It fires only
+when `GetItemQuality` returns 5 — a **set** item, `cmp eax, 5` at `0x4c15fd`. For each one it calls
+`STATLIST_RemoveFromOwnerAndRecalc` (`0x4c1658`), which detaches the item's whole stat list, then
+rebuilds it with `ITEM_ApplySocketableAndEquipStats(wearer, THE SET ITEM, 0)` at `0x4c1661`. That
+second argument is the set item, not a filler, so the gem test (`IsOfType(a2, 20)`, `0x4c0d30`) and
+the rune test (`IsOfType(a2, 74)`, `0x4c0da3`) both fail and it lands on `ITEM_ProcessSetItemEquip`,
+which re-applies set state and nothing else.
+
+**Nothing re-applies the socket fillers.** So a worn Tal Rasha's Horadric Crest with an Um in it
+grants its wearer `All Resistances +15` — its own set property alone — while the same helm in the
+stash grants 30. The mods come back when the piece is re-socketed or re-equipped, and go again on the
+next recalc. Non-set items are unaffected: a runeword keeps every rune.
+
+A live capture shows both halves of it in one snapshot:
+
+| item | quality | worn | the game's own tooltip string | fillers counted |
+|---|---|---|---|---|
+| Treachery | 2 | yes | `Cold Resist +30%` | yes |
+| Sanctuary | 2 | yes | `All Resistances +66` | yes |
+| Call to Arms | 3 | yes | `+278% Enhanced Damage` (228 without) | yes |
+| Gemmed Thresher | 2 | no | `+9 to Minimum Damage` | yes |
+| **Tal Rasha's Crest** | **5** | yes | **`All Resistances +15`** (30 without) | **no** |
+
+Four socketed non-set items list their fillers. The one set item does not, with the Um sitting in it.
+
+#### What we do instead
+
+**We render 30 — what the item grants.** `Render`, `MergedStats` and `SocketFillerStats` all agree,
+unconditionally, and nothing in the API mentions the discard: there is no option to get 15 back and
+no flag reporting that the game would.
+
+The reasoning: an item must not appear to lose its rune because something equipped it. A stash search
+that indexed the discarded value would drop the item; a comparison between a worn piece and a spare
+would rank them differently for no reason but which one is currently on the body; and the value is
+not even stable in-game, since re-socketing restores it until the next recalc. Carrying the game's
+answer alongside ours would have meant every consumer choosing between two numbers on every read,
+which is a decision none of them wanted to make.
+
+If you need the number the game is currently drawing on screen, the condition is: the item is
+`quality == 5`, equipped, not broken, and holds a gem or rune. Subtract `SocketFillerStats(filler,
+host)` for each filler when all four hold.
 
 ### SocketFillerStats — one filler's contribution
 

@@ -53,52 +53,15 @@ namespace D2ItemToolkit
         }
 
         /// <summary>
-        /// True when the host is an EQUIPPED SET item, whose fillers the game has thrown away.
-        ///
-        /// ITEM_RecalcAllEquippedItems 0x4c1350 ends with a loop over the eleven body slots that
-        /// fires only for `GetItemQuality == 5` and neither flag 0x100 nor 0x4000 (0x4c15ec-
-        /// 0x4c162b). For each such item it calls STATLIST_RemoveFromOwnerAndRecalc (0x4c1658),
-        /// which detaches the item's whole stat list (0x6277fa takes item+0x5C and hands it to
-        /// STATLIST_DetachAndRecalc), and then rebuilds with
-        /// ITEM_ApplySocketableAndEquipStats(wearer, THE SET ITEM, 0) at 0x4c1661 — where a2 is the
-        /// set item rather than a filler, so `IsOfType(a2, 20)` and `IsOfType(a2, 74)` both fail
-        /// (0x4c0d30 / 0x4c0da3) and it lands on ITEM_ProcessSetItemEquip (0x4c0e06), which only
-        /// touches set states and the set-bonus list.
-        ///
-        /// Nothing re-applies the fillers. The mods are gone until the item is socketed again, and
-        /// a recalc runs on every equip, unequip and stat change — so for a worn set item this is
-        /// the steady state, not a race.
-        ///
-        /// A real capture is what exposed it: Tal Rasha's Horadric Crest with an Um in it draws
-        /// `All Resistances +15`, its own set property alone, while a runeword shield in the same
-        /// snapshot draws all three of its runes' mods. Quality 2 skips the loop.
-        /// </summary>
-        public static bool FillersAreDiscardedByRecalc(IUnit host, bool equipped)
-        {
-            // 0x4000 has no name in ItemRecordFlags because nothing else reads it; 0x4c1618 and
-            // 0x4c1628 test it beside the broken flag as the loop's two exclusions.
-            const uint CannotEquip = 0x4000;
-
-            return equipped
-                   && host != null
-                   && host.Quality == ItemQualityNo.Set
-                   && ((uint)host.ItemFlags & ((uint)ItemRecordFlags.Broken | CannotEquip)) == 0;
-        }
-
-        /// <summary>
-        /// <paramref name="hostIsEquipped"/> has NO default on purpose. It decides whether the
-        /// recalc has already thrown the fillers away, and a silent false is how the separated
-        /// render grew a filler block for stats the game does not grant. Every caller states it.
-        ///
         /// The union over every filler that carries no captured stats of its own. Fillers that DO
         /// carry them are left alone: a server-side producer records the mods the engine already
         /// assigned, and synthesising on top would count them twice.
         /// </summary>
-        public SortedDictionary<int, int> Contributions(IUnit host, bool hostIsEquipped)
+        public SortedDictionary<int, int> Contributions(IUnit host)
         {
             var merged = new SortedDictionary<int, int>();
 
-            if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
+            if (host == null)
             {
                 return merged;
             }
@@ -185,9 +148,9 @@ namespace D2ItemToolkit
         /// exactly as funcs 11 and 19 read theirs. So a gem or rune contributes no span at all; a
         /// socketed JEWEL does, but from its own affixes rather than from here.
         /// </summary>
-        public IEnumerable<ItemProperty> FillerProperties(IUnit host, bool hostIsEquipped)
+        public IEnumerable<ItemProperty> FillerProperties(IUnit host)
         {
-            if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
+            if (host == null)
             {
                 yield break;
             }
@@ -222,9 +185,9 @@ namespace D2ItemToolkit
         /// items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
         /// (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
         /// </summary>
-        public int SlotFor(IUnit host, bool hostIsEquipped)
+        public int SlotFor(IUnit host)
         {
-            if (host == null || FillersAreDiscardedByRecalc(host, hostIsEquipped))
+            if (host == null)
             {
                 return -1;
             }

@@ -4,8 +4,7 @@ import type { ItemTypeTree } from '../Tables/ItemTypeTree.js';
 import { GemTable } from '../Tables/GemTable.js';
 import { PropertyApplier, type ItemProperty } from './PropertyApplier.js';
 import { ItemStatReader, ItemStatView } from './ItemStatReader.js';
-import { ItemRecordFlags, ItemRecordReader } from './ItemRecord.js';
-import { ItemQualityNo } from '../Tooltip/ItemNameBuilder.js';
+import { ItemRecordReader } from './ItemRecord.js';
 import type { Unit } from './Unit.js';
 import { Int32 } from '../Types.js';
 
@@ -57,51 +56,14 @@ export class SocketStatSynthesis {
   }
 
   /**
-   * True when the host is an EQUIPPED SET item, whose fillers the game has thrown away.
-   *
-   * ITEM_RecalcAllEquippedItems 0x4c1350 ends with a loop over the eleven body slots that fires only
-   * for `GetItemQuality == 5` and neither flag 0x100 nor 0x4000 (0x4c15ec-0x4c162b). For each such
-   * item it calls STATLIST_RemoveFromOwnerAndRecalc (0x4c1658), which detaches the item's whole stat
-   * list (0x6277fa takes item+0x5C and hands it to STATLIST_DetachAndRecalc), and then rebuilds with
-   * ITEM_ApplySocketableAndEquipStats(wearer, THE SET ITEM, 0) at 0x4c1661 — where a2 is the set
-   * item rather than a filler, so `IsOfType(a2, 20)` and `IsOfType(a2, 74)` both fail (0x4c0d30 /
-   * 0x4c0da3) and it lands on ITEM_ProcessSetItemEquip (0x4c0e06), which only touches set states and
-   * the set-bonus list.
-   *
-   * Nothing re-applies the fillers. The mods are gone until the item is socketed again, and a recalc
-   * runs on every equip, unequip and stat change — so for a worn set item this is the steady state,
-   * not a race.
-   *
-   * A real capture is what exposed it: Tal Rasha's Horadric Crest with an Um in it draws
-   * `All Resistances +15`, its own set property alone, while a runeword shield in the same snapshot
-   * draws all three of its runes' mods. Quality 2 skips the loop.
-   */
-  static fillersAreDiscardedByRecalc(host: Unit | null, equipped: boolean): boolean {
-    // 0x4000 has no name in ItemRecordFlags because nothing else reads it; 0x4c1618 and 0x4c1628
-    // test it beside the broken flag as the loop's two exclusions.
-    const CannotEquip = 0x4000;
-
-    return (
-      equipped &&
-      host !== null &&
-      host.quality === ItemQualityNo.Set &&
-      (host.itemFlags & (ItemRecordFlags.Broken | CannotEquip)) === 0
-    );
-  }
-
-  /**
    * The union over every filler that carries no captured stats of its own. Fillers that DO carry
    * them are left alone: a server-side producer records the mods the engine already assigned, and
    * synthesising on top would count them twice.
    */
-  contributions(host: Unit | null, hostIsEquipped: boolean): Map<number, number> {
+  contributions(host: Unit | null): Map<number, number> {
     const merged = new Map<number, number>();
 
-    if (
-      host === null ||
-      host === undefined ||
-      SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)
-    ) {
+    if (host === null || host === undefined) {
       return merged;
     }
 
@@ -128,8 +90,8 @@ export class SocketStatSynthesis {
    * items.txt `gemapplytype` for this host — which of the three gems.txt mod columns applies
    * (0x65c6f0 halts above two). -1 when the host cannot take fillers at all.
    */
-  slotFor(host: Unit | null, hostIsEquipped: boolean): number {
-    if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {
+  slotFor(host: Unit | null): number {
+    if (host === null) {
       return -1;
     }
 
@@ -175,10 +137,10 @@ export class SocketStatSynthesis {
    * read theirs. So a gem or rune contributes no span at all; a socketed JEWEL does, but from its
    * own affixes rather than from here.
    */
-  fillerProperties(host: Unit | null, hostIsEquipped: boolean): ItemProperty[] {
+  fillerProperties(host: Unit | null): ItemProperty[] {
     const found: ItemProperty[] = [];
 
-    if (host === null || SocketStatSynthesis.fillersAreDiscardedByRecalc(host, hostIsEquipped)) {
+    if (host === null) {
       return found;
     }
 

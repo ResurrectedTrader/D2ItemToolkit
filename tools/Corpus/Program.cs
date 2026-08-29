@@ -532,17 +532,21 @@ namespace D2ItemToolkit.Tools
             // ITEM_RecalcAllEquippedItems 0x4c1350 detaches an EQUIPPED quality-5 item's whole stat
             // list (0x4c1658) and rebuilds it through ITEM_ApplySocketableAndEquipStats with the
             // SET ITEM as a2 (0x4c1661), which lands on ITEM_ProcessSetItemEquip (0x4c0e06) and
-            // never re-applies the fillers. So the same Um shows `All Resistances +15` in the
-            // backpack and nothing at all when worn. Both shapes are here because the gate is only
-            // policed if the corpus reaches it BOTH ways.
+            // never re-applies the fillers — so the GAME shows the same Um's `All Resistances +15`
+            // in the backpack and nothing at all when worn. Both engines show it either way and
+            // show it either way. Both shapes are here because the render must NOT move between
+            // them, which is only policed if the corpus reaches the arm BOTH ways.
             //
             // Tal Rasha's Horadric Crest with an Um, which is the pair a real capture showed.
+            // `location` tracks isEquipped so the pair really is worn versus carried, rather than
+            // differing only in the set input the fillers no longer read.
             foreach (bool equipped in new[] { false, true })
             {
                 cases.Add(Case(
                     "set-socketed-um-" + (equipped ? "worn" : "bag"),
                     "{ \"unitType\": 4, \"classId\": " + Items.ClassIdForCode("xsk")
                     + ", \"quality\": 5, \"itemFlags\": " + (16 | 0x800) + ", \"fileIndex\": 80"
+                    + ", \"location\": " + (equipped ? 1 : 3) + ", \"x\": 1"
                     + ", \"statsLists\": [ "
                     + "{ \"stateNo\": 0, \"flags\": 2147483648, \"stats\": ["
                     + "{ \"id\": 31, \"value\": 100 }, { \"id\": 194, \"value\": 1 } ] } ], "
@@ -1387,10 +1391,9 @@ namespace D2ItemToolkit.Tools
                     + ", " + CarriedPiece(Wings, "amu", 3, 0))));
 
             // A WORN set piece with a rune in it. ITEM_RecalcAllEquippedItems 0x4c1350 throws an
-            // equipped set item's fillers away, so Render draws none of the rune's mods â while
-            // MergedStats deliberately keeps them and reports the disagreement through
-            // FillersIgnoredBecauseWorn. Nothing else in the corpus sets that flag, so without
-            // this case the whole worn-set arm of the totals surface is unpoliced.
+            // equipped set item's fillers away, so the GAME grants 15 where the item is worth 30.
+            // Both implementations render the 30 regardless, and this is the case that puts a WORN
+            // socketed set piece in front of the totals surface.
             int deathMask = Items.ClassIdForCode("xsk");
             int umRune = Items.ClassIdForCode("r22");
             if (deathMask >= 0 && umRune >= 0)

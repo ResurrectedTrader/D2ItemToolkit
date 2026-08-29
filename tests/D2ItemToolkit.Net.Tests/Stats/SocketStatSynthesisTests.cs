@@ -102,7 +102,7 @@ namespace D2ItemToolkit.Tests
         }
 
         [Fact]
-        public void An_equipped_set_items_fillers_are_discarded_by_the_recalc()
+        public void An_equipped_set_item_still_renders_its_fillers()
         {
             // ITEM_RecalcAllEquippedItems 0x4c1350 ends with a loop over the eleven body slots that
             // fires only for quality 5 (0x4c15ec-0x4c162b). It calls
@@ -110,11 +110,9 @@ namespace D2ItemToolkit.Tests
             // list (0x6277fa -> STATLIST_DetachAndRecalc), then rebuilds with
             // ITEM_ApplySocketableAndEquipStats(wearer, THE SET ITEM, 0) at 0x4c1661 — a2 is the set
             // item, not a filler, so both IsOfType gates fail (0x4c0d30 / 0x4c0da3) and it lands on
-            // ITEM_ProcessSetItemEquip. The fillers are never re-applied.
+            // ITEM_ProcessSetItemEquip. The fillers are never re-applied, so the GAME draws 15.
             //
-            // A real capture is what caught it: Tal Rasha's Horadric Crest with an Um in it draws
-            // `All Resistances +15` — its own set property alone — while a runeword shield in the
-            // same snapshot draws all three of its runes' mods.
+            // We draw what the item grants, which does not change when something equips it.
             Unit worn = Unit.FromJson(
                 "{ \"unitType\": 4, \"classId\": " + ClassId("xsk")
                 + ", \"quality\": 5, \"itemFlags\": 2064, \"fileIndex\": 80, "
@@ -127,38 +125,29 @@ namespace D2ItemToolkit.Tests
             var carried = new SetItemTooltipInput();
             carried.IsEquipped = false;
 
-            Assert.DoesNotContain(
-                "All Resistances",
-                TooltipEngine.Embedded.RenderSetItem(worn, equipped).Text,
-                StringComparison.Ordinal);
-
-            // Not equipped, so the loop never ran and Um's helm mod is still on it.
-            Assert.Contains(
-                "All Resistances +15",
-                TooltipEngine.Embedded.RenderSetItem(worn, carried).Text,
-                StringComparison.Ordinal);
+            foreach (SetItemTooltipInput state in new[] { equipped, carried })
+            {
+                Assert.Contains(
+                    "All Resistances +15",
+                    TooltipEngine.Embedded.RenderSetItem(worn, state).Text,
+                    StringComparison.Ordinal);
+            }
         }
 
         [Fact]
-        public void Only_a_SET_item_loses_its_fillers_that_way()
+        public void How_the_host_is_carried_never_changes_the_synthesis()
         {
-            // 0x4c1614 gates the loop on GetItemQuality == 5. A normal-quality host keeps its
-            // fillers however it is carried — which is why the two runeword items in the same
-            // capture render their runes and the set item does not.
-            Assert.False(
-                SocketStatSynthesis.FillersAreDiscardedByRecalc(
-                    Host("urg", "r18"), equipped: true));
+            // Nothing gates the synthesis on where the item sits. The GAME gates its own on quality
+            // 5 and equipped (0x4c15fd), which is the divergence the README documents; here the two
+            // renders have to be character for character the same.
+            Unit worn = Host("urg", "r18");
+            worn.Location = 1;
 
-            Assert.True(
-                SocketStatSynthesis.FillersAreDiscardedByRecalc(
-                    Unit.FromJson("{ \"unitType\": 4, \"quality\": 5, \"itemFlags\": 16 }"),
-                    equipped: true));
+            Unit stashed = Host("urg", "r18");
+            stashed.Location = 3;
 
-            // 0x4c1618 / 0x4c1628 exclude a broken item and flag 0x4000.
-            Assert.False(
-                SocketStatSynthesis.FillersAreDiscardedByRecalc(
-                    Unit.FromJson("{ \"unitType\": 4, \"quality\": 5, \"itemFlags\": 272 }"),
-                    equipped: true));
+            Assert.Equal(Render(stashed), Render(worn));
+            Assert.Contains("+10 to Dexterity", Render(worn));
         }
 
         [Fact]

@@ -93,7 +93,6 @@ interface PackedRanges {
 /** The `mergedStats` object, as `PackMergedStats` in tools/Reference/Program.cs emits it. */
 interface PackedMergedStats {
   stats: { stat: number; layer: number; value: number }[];
-  fillersIgnoredBecauseWorn: boolean;
   excludedPackedStats: number[];
 }
 
@@ -174,7 +173,6 @@ function engine(): TooltipEngine {
 function packMergedStats(source: ItemMergedStats): PackedMergedStats {
   return {
     stats: source.stats.map(s => ({ stat: s.statId, layer: s.layer, value: s.value })),
-    fillersIgnoredBecauseWorn: source.fillersIgnoredBecauseWorn,
     excludedPackedStats: [...source.excludedPackedStats],
   };
 }
@@ -405,7 +403,7 @@ export function renderRecord(
     // Mirrors TooltipEngine.compose: a captured gem or rune has no stat chain, so its contribution
     // is rebuilt from gems.txt. Omitting it here would leave the whole synthesis outside the
     // differential.
-    const synthesised = socketStats.contributions(unit, setInput.isEquipped ?? false);
+    const synthesised = socketStats.contributions(unit);
     stats = addSynthesised(stats, synthesised);
     modifierStats = addSynthesised(modifierStats, synthesised);
 
@@ -447,13 +445,12 @@ export function renderRecord(
 
     // The roll-range reconstruction. It reaches property handlers no rendering path touches — the
     // affix, unique, runeword and superior codes — so without it those branches are invisible to
-    // the differential, which is exactly how the colour-3 marker gap survived. isEquipped is
-    // threaded through rather than defaulted, so the recalc-discard arm is exercised here too.
+    // the differential, which is exactly how the colour-3 marker gap survived.
     payload.ranges = packRanges(
       ranges().reconstruct(
         item,
         modifierStats,
-        socketStats.fillerProperties(unit, setInput.isEquipped ?? false),
+        socketStats.fillerProperties(unit),
         // The tiers the WEARER has earned, not null. Passing null left RollSources.SetBonus reached
         // by zero of the 935 cases, so the whole earned-set fold sat outside the differential.
         engine().earnedSetIdsOf(wearer),
@@ -461,8 +458,8 @@ export function renderRecord(
     );
 
     // The TOTALS surface, which shares nothing with the render path: it folds the gems.txt
-    // synthesis and op 13 into one merged view and deliberately IGNORES the worn-set discard, so
-    // none of that is reachable through the layers above.
+    // synthesis and op 13 into one merged view, so none of that is reachable through the layers
+    // above.
     payload.mergedStats = packMergedStats(engine().mergedStats(unit));
 
     const sections = new RecordSections(

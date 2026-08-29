@@ -14,8 +14,7 @@ import { ItemTooltipSection } from '../../../src/D2ItemToolkit.Ts/src/Tooltip/It
 /**
  * The peer of the C# MergedStatsTests: the three things a stored item cannot answer from its raw
  * statlists — a filler's stats are not in the capture at all, an item's own stats are split across
- * lists with no total anywhere, and op 13 is unapplied — plus the two cases where these totals
- * deliberately differ from what the game is currently granting.
+ * lists with no total anywhere, and op 13 is unapplied.
  */
 const Data = D2DataFiles.load();
 const Engine = TooltipEngine.embedded;
@@ -119,22 +118,11 @@ describe('merged item stats', () => {
     );
   });
 
-  it('ignores the worn-set discard but reports it', () => {
-    // render reproduces the game and shows 15 on a WORN set piece, because the recalc threw the Um
-    // away. These totals answer what the item would give, so they stay at 30 — and say so.
-    const worn = Engine.mergedStats(crestWithUm(LocationEquipped));
-
-    expect(valueOf(worn, StatFireResist)).toBe(30);
-    expect(worn.fillersIgnoredBecauseWorn).toBe(true);
-
-    expect(Engine.mergedStats(crestWithUm(LocationStash)).fillersIgnoredBecauseWorn).toBe(false);
-
-    // The flag tracks the REASON, not merely the quality: an unsocketed set piece has no filler
-    // to lose.
-    const noFillers = crestWithUm(LocationEquipped);
-    noFillers.items = [];
-
-    expect(Engine.mergedStats(noFillers).fillersIgnoredBecauseWorn).toBe(false);
+  it('keeps a worn set piece its filler totals', () => {
+    // The GAME throws the Um away when the piece is worn (0x4c15fd gates the recalc loop on quality
+    // 5). These totals answer what the ITEM grants, which wearing it does not change.
+    expect(valueOf(Engine.mergedStats(crestWithUm(LocationEquipped)), StatFireResist)).toBe(30);
+    expect(valueOf(Engine.mergedStats(crestWithUm(LocationStash)), StatFireResist)).toBe(30);
   });
 
   it('applies op 13 and keeps the percent', () => {
@@ -273,14 +261,6 @@ describe('merged item stats', () => {
     ).toBe(15);
 
     expect(valueOf(Engine.mergedStats(helm, { includeSockets: false }), StatFireResist)).toBe(0);
-
-    // A jewel arrives through the stat VIEW, which the recalc discard does not gate, so a worn set
-    // piece holding one leaves the two views in agreement.
-    helm.quality = 5;
-    helm.fileIndex = TalRashasHoradricCrest;
-    helm.location = LocationEquipped;
-
-    expect(Engine.mergedStats(helm).fillersIgnoredBecauseWorn).toBe(false);
   });
 
   it('applies op 13 to the BASE defense rather than the merged one', () => {
@@ -393,55 +373,24 @@ describe('merged item stats', () => {
     const inShield = Engine.socketFillerStats(crest.items[0] as Unit, shield);
     expect(inShield.find(s => s.statId === StatFireResist)?.value).toBe(22);
   });
-  it('applyWornSetDiscard off restores the fillers and nothing else', () => {
-    // The option that replaces faking `location`. Off, a worn set piece renders as though its
-    // fillers still applied — and ONLY that changes, which is the whole point: `location` also
-    // decides the worn mask, the piece colours and the full-set block.
+  it('keeps a worn set piece its socket fillers', () => {
+    // The GAME does not: 0x4c15fd gates a loop on quality 5 that detaches the item's stat list and
+    // rebuilds it through ITEM_ProcessSetItemEquip, so the character is granted 15. That divergence
     const worn = crestWithUm(LocationEquipped);
-    const asPotential = { applyWornSetDiscard: false };
 
     // The Crest grants res-all 15 of its OWN and an Um grants a helm another 15, so the two are
     // indistinguishable by presence — only the NUMBER says whether the rune counted.
     expect(sectionOf(Engine.render(worn), ItemTooltipSection.Modifiers)).toContain(
-      'All Resistances +15',
+      'All Resistances +30',
     );
-    expect(
-      sectionOf(Engine.render(worn, null, asPotential), ItemTooltipSection.Modifiers),
-    ).toContain('All Resistances +30');
-
-    // The piece is still EQUIPPED for every other purpose. Faking location would have moved these.
-    for (const section of [
-      ItemTooltipSection.SetPieceList,
-      ItemTooltipSection.PartialSetBonus,
-      ItemTooltipSection.FullSetBonus,
-    ]) {
-      expect(sectionOf(Engine.render(worn, null, asPotential), section)).toEqual(
-        sectionOf(Engine.render(worn), section),
-      );
-    }
-  });
-
-  it('applyWornSetDiscard changes nothing when the discard does not apply', () => {
-    // Not worn, so there is no discard to switch off and the option is inert. This is what stops it
-    // becoming a general "ignore sockets" knob by accident.
-    const carried = crestWithUm(LocationStash);
-
-    expect(Engine.render(carried, null, { applyWornSetDiscard: false }).text).toBe(
-      Engine.render(carried).text,
-    );
-  });
-
-  it('applyWornSetDiscard off agrees with mergedStats', () => {
-    // The two surfaces answer the same question once the render is told to. Before the option, the
-    // only way to line them up was to falsify the record.
-    const worn = crestWithUm(LocationEquipped);
-
-    expect(
-      sectionOf(
-        Engine.render(worn, null, { applyWornSetDiscard: false }),
-        ItemTooltipSection.Modifiers,
-      ),
-    ).toContain('All Resistances +30');
     expect(valueOf(Engine.mergedStats(worn), StatFireResist)).toBe(30);
+  });
+
+  it('grants the same whether the piece is worn or stashed', () => {
+    // The modifier block is what the fillers reach; the set sections legitimately differ, because
+    // wearing the piece is what lights a tier.
+    expect(
+      sectionOf(Engine.render(crestWithUm(LocationEquipped)), ItemTooltipSection.Modifiers),
+    ).toEqual(sectionOf(Engine.render(crestWithUm(LocationStash)), ItemTooltipSection.Modifiers));
   });
 });

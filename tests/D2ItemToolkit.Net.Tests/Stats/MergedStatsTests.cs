@@ -106,25 +106,13 @@ namespace D2ItemToolkit.Tests
         }
 
         [Fact]
-        public void The_worn_set_discard_is_ignored_but_reported()
+        public void A_worn_set_piece_keeps_its_filler_totals()
         {
-            // Render reproduces the game and shows 15 on a WORN set piece, because the recalc threw
-            // the Um away. These totals answer what the item would give, so they stay at 30 — and
-            // say so, since that is the one case where the two disagree.
-            ItemMergedStats worn = Engine.MergedStats(CrestWithUm(LocationEquipped));
-
-            Assert.Equal(30, ValueOf(worn, StatFireResist));
-            Assert.True(worn.FillersIgnoredBecauseWorn);
-
-            // Carried, the two views agree, so there is nothing to warn about.
-            Assert.False(Engine.MergedStats(CrestWithUm(LocationStash)).FillersIgnoredBecauseWorn);
-
-            // And the flag tracks the REASON, not merely the quality: an unsocketed set piece has
-            // no filler to lose.
-            Unit noFillers = CrestWithUm(LocationEquipped);
-            noFillers.Items.Clear();
-
-            Assert.False(Engine.MergedStats(noFillers).FillersIgnoredBecauseWorn);
+            // The GAME throws the Um away when the piece is worn (0x4c15fd gates the recalc loop on
+            // quality 5). These totals answer what the ITEM grants, which wearing it does not change,
+            // so both states read 30.
+            Assert.Equal(30, ValueOf(Engine.MergedStats(CrestWithUm(LocationEquipped)), StatFireResist));
+            Assert.Equal(30, ValueOf(Engine.MergedStats(CrestWithUm(LocationStash)), StatFireResist));
         }
 
         [Fact]
@@ -264,14 +252,6 @@ namespace D2ItemToolkit.Tests
             withoutSockets.IncludeSockets = false;
 
             Assert.Equal(0, ValueOf(Engine.MergedStats(helm, withoutSockets), StatFireResist));
-
-            // A jewel arrives through the stat VIEW, which the recalc discard does not gate, so a
-            // worn set piece holding one leaves the two views in agreement.
-            helm.Quality = ItemQualityNo.Set;
-            helm.FileIndex = TalRashasHoradricCrest;
-            helm.Location = LocationEquipped;
-
-            Assert.False(Engine.MergedStats(helm).FillersIgnoredBecauseWorn);
         }
 
         [Fact]
@@ -388,70 +368,34 @@ namespace D2ItemToolkit.Tests
             Assert.Equal(22, inShield.Single(s => s.StatId == StatFireResist).Value);
         }
         /// <summary>
-        /// The option that replaces faking <see cref="IUnit.Location"/>. Off, a worn set piece
-        /// renders as though its fillers still applied — and ONLY that changes, which is the whole
-        /// point: `location` also decides the worn mask, the piece colours and the full-set block,
-        /// so lying about it moves all four at once.
+        /// A worn set piece keeps its socket fillers. The GAME does not — 0x4c15fd gates a loop on
+        /// quality 5 that detaches the item's stat list and rebuilds it through
+        /// ITEM_ProcessSetItemEquip, so the character is granted 15 rather than 30.
         /// </summary>
         [Fact]
-        public void ApplyWornSetDiscard_off_restores_the_fillers_and_nothing_else()
+        public void A_worn_set_piece_keeps_its_socket_fillers()
         {
             Unit worn = CrestWithUm(LocationEquipped);
-
-            var asPotential = new TooltipOptions();
-            asPotential.ApplyWornSetDiscard = false;
-
-            string[] defaultMods = Mods(Engine.Render(worn));
-            string[] potentialMods = Mods(Engine.Render(worn, null, asPotential));
 
             // The Crest grants res-all 15 of its OWN and an Um grants a helm another 15, so the two
             // are indistinguishable by presence — only the NUMBER says whether the rune counted.
-            // That collision is exactly what made the original report read as a bug.
-            Assert.Contains("All Resistances +15", defaultMods);
-            Assert.Contains("All Resistances +30", potentialMods);
-
-            // The set piece is still EQUIPPED for every other purpose. Faking Location would have
-            // moved these too.
-            Tooltip byDefault = Engine.Render(worn);
-            Tooltip potential = Engine.Render(worn, null, asPotential);
-
-            Assert.Equal(
-                Sections(byDefault, ItemTooltipSection.SetPieceList),
-                Sections(potential, ItemTooltipSection.SetPieceList));
-            Assert.Equal(
-                Sections(byDefault, ItemTooltipSection.PartialSetBonus),
-                Sections(potential, ItemTooltipSection.PartialSetBonus));
-            Assert.Equal(
-                Sections(byDefault, ItemTooltipSection.FullSetBonus),
-                Sections(potential, ItemTooltipSection.FullSetBonus));
-        }
-
-        [Fact]
-        public void ApplyWornSetDiscard_changes_nothing_when_the_discard_does_not_apply()
-        {
-            // Not worn, so there is no discard to switch off and the option is inert. This is what
-            // stops it becoming a general "ignore sockets" knob by accident.
-            Unit carried = CrestWithUm(LocationStash);
-
-            var asPotential = new TooltipOptions();
-            asPotential.ApplyWornSetDiscard = false;
-
-            Assert.Equal(
-                Engine.Render(carried).Text, Engine.Render(carried, null, asPotential).Text);
-        }
-
-        [Fact]
-        public void ApplyWornSetDiscard_off_agrees_with_MergedStats()
-        {
-            // The two surfaces answer the same question once the render is told to. Before the
-            // option, the only way to line them up was to falsify the record.
-            Unit worn = CrestWithUm(LocationEquipped);
-
-            var asPotential = new TooltipOptions();
-            asPotential.ApplyWornSetDiscard = false;
-
-            Assert.Contains("All Resistances +30", Mods(Engine.Render(worn, null, asPotential)));
+            Assert.Contains("All Resistances +30", Mods(Engine.Render(worn)));
             Assert.Equal(30, ValueOf(Engine.MergedStats(worn), StatFireResist));
+        }
+
+        [Fact]
+        public void Wearing_a_set_piece_does_not_change_what_it_grants()
+        {
+            // Every surface answers the same question, so nothing about the fillers moves when the
+            // piece goes on the body. The set sections legitimately differ — wearing it is what
+            // lights a tier — so the modifier block is what is compared.
+            Assert.Equal(
+                Mods(Engine.Render(CrestWithUm(LocationStash))),
+                Mods(Engine.Render(CrestWithUm(LocationEquipped))));
+
+            Assert.Equal(
+                ValueOf(Engine.MergedStats(CrestWithUm(LocationStash)), StatFireResist),
+                ValueOf(Engine.MergedStats(CrestWithUm(LocationEquipped)), StatFireResist));
         }
 
         private static string[] Mods(Tooltip tip)

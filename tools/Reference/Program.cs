@@ -106,9 +106,6 @@ namespace D2ItemToolkit.Tools
 
                 ItemIdentity item = ItemRecordReader.ReadIdentity(record);
 
-                // Read BEFORE the socket synthesis: ITEM_RecalcAllEquippedItems 0x4c1350 throws an
-                // equipped set item's fillers away (0x4c1658 / 0x4c1661), so `isEquipped` decides
-                // whether there is a contribution at all and TooltipEngine.RenderSetItem passes it.
                 SetItemTooltipInput setInput = ReadSetInput(testCase, record, wearer);
 
                 SortedDictionary<int, int> stats =
@@ -121,8 +118,7 @@ namespace D2ItemToolkit.Tools
                 // Mirrors TooltipEngine.Compose: a captured gem or rune has no stat chain, so its
                 // contribution is rebuilt from gems.txt. Omitting it here would leave the whole
                 // synthesis outside the differential.
-                SortedDictionary<int, int> synthesised =
-                    SocketStats.Contributions(record, setInput.IsEquipped);
+                SortedDictionary<int, int> synthesised = SocketStats.Contributions(record);
                 AddInto(stats, synthesised);
                 AddInto(modifierStats, synthesised);
 
@@ -138,21 +134,19 @@ namespace D2ItemToolkit.Tools
                 // touches — the affix, unique, runeword and superior codes — so without it those
                 // branches are invisible to the differential, which is exactly how the colour-3
                 // marker gap survived.
-                // isEquipped is threaded through rather than defaulted, so the recalc-discard arm
-                // is exercised here too.
                 payload.Append(", \"ranges\": ").Append(
                     PackRanges(Ranges.Reconstruct(
                         item,
                         modifierStats,
-                        SocketStats.FillerProperties(record, setInput.IsEquipped),
+                        SocketStats.FillerProperties(record),
                         // The tiers the WEARER has earned, not null. Passing null left
                         // RollSources.SetBonus reached by zero of the 935 cases, so the whole
                         // earned-set fold sat outside the differential.
                         Engine.EarnedSetIdsOf(wearer))));
 
                 // The TOTALS surface, which shares nothing with the render path: it folds the
-                // gems.txt synthesis and op 13 into one merged view and deliberately IGNORES the
-                // worn-set discard, so none of that is reachable through the layers above.
+                // gems.txt synthesis and op 13 into one merged view, so none of that is reachable
+                // through the layers above.
                 payload.Append(", \"mergedStats\": ")
                     .Append(PackMergedStats(Engine.MergedStats(record)));
 
@@ -421,8 +415,7 @@ namespace D2ItemToolkit.Tools
             }
 
             return "{\"stats\": [" + string.Join(", ", stats)
-                + "], \"fillersIgnoredBecauseWorn\": "
-                + (merged.FillersIgnoredBecauseWorn ? "true" : "false")
+                + "]"
                 + ", \"excludedPackedStats\": ["
                 + string.Join(", ", merged.ExcludedPackedStats) + "]}";
         }

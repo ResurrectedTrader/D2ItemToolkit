@@ -14,9 +14,11 @@ import {
 } from '../../../src/D2ItemToolkit.Ts/src/Tooltip/TooltipEngine.js';
 
 /**
- * The peer of the C# WornSetItemSocketTests. The separated-socket mode MOVES a filler's stats out
- * of the item's block and must never ADD stats the merged render would not have shown; a worn set
- * item, whose fillers the recalc discards (0x4c1350), is where the two came apart.
+ * The peer of the C# WornSetItemSocketTests. A worn set piece keeps its socket fillers, exactly as a
+ * carried one does. The GAME throws them away — ITEM_RecalcAllEquippedItems 0x4c1350 detaches the
+ * item's stat list and rebuilds it through ITEM_ProcessSetItemEquip, gated on quality 5 at 0x4c15fd
+ * — so what the character is granted and what the item grants come apart for this one item class.
+ * These tests pin the second, which is what every surface here reports.
  */
 const Data = D2DataFiles.load();
 const Engine = TooltipEngine.embedded;
@@ -87,22 +89,24 @@ describe('a worn set item and its sockets', () => {
     ]);
   });
 
-  it('a worn set item has no filler to move and grows no block', () => {
+  it('a worn set item moves its filler into a block the same way', () => {
+    // Equipping the piece changes nothing about what its sockets contribute, so the worn render
+    // splits exactly as the carried one does.
     const worn = crestWithUm(LocationEquipped);
 
-    expect(sectioned(Engine.render(worn), ItemTooltipSection.Modifiers)).not.toContain(
+    expect(sectioned(Engine.render(worn), ItemTooltipSection.Modifiers)).toContain(
       'All Resistances +15',
     );
 
     expect(
       sectioned(Engine.render(worn, null, separated), ItemTooltipSection.SocketContribution),
-    ).toEqual([]);
+    ).toEqual(['Um Rune', 'All Resistances +15']);
   });
 
-  it('the resistance number says whether the rune counted', () => {
+  it('the resistance number says the rune counted either way', () => {
     // The Crest's OWN `res-all 15` and an Um's `res-all 15` are the same four stats, so if the rune
-    // applied they would MERGE rather than appear twice. That makes the single number the decisive
-    // evidence: +15 means the filler does not count, +30 means it does.
+    // applied they MERGE rather than appear twice: +30 means the filler counted, +15 means it did
+    // not. Both states read 30 — the game itself reads 15 when the piece is worn.
     const resists = [39, 41, 43, 45];
 
     const withOwnResists = (location: number): Unit => {
@@ -117,13 +121,11 @@ describe('a worn set item and its sockets', () => {
       return crest;
     };
 
-    expect(
-      sectioned(Engine.render(withOwnResists(LocationEquipped)), ItemTooltipSection.Modifiers),
-    ).toContain('All Resistances +15');
-
-    expect(
-      sectioned(Engine.render(withOwnResists(LocationStash)), ItemTooltipSection.Modifiers),
-    ).toContain('All Resistances +30');
+    for (const location of [LocationEquipped, LocationStash]) {
+      expect(
+        sectioned(Engine.render(withOwnResists(location)), ItemTooltipSection.Modifiers),
+      ).toContain('All Resistances +30');
+    }
   });
 
   it('the defense modifier line does not borrow the section span', () => {

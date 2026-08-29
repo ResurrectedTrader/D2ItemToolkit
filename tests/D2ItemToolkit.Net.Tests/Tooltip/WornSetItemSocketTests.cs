@@ -4,15 +4,16 @@ using Xunit;
 namespace D2ItemToolkit.Tests
 {
     /// <summary>
-    /// The separated-socket mode MOVES a filler's stats out of the item's block. It must never ADD
-    /// stats the merged render would not have shown, and a worn set item is where the two come
-    /// apart: ITEM_RecalcAllEquippedItems 0x4c1350 discards its fillers, so there is nothing to
-    /// move — and a block listing them anyway claimed the item granted what it does not.
+    /// A worn set piece keeps its socket fillers, exactly as a carried one does. The GAME throws
+    /// them away — ITEM_RecalcAllEquippedItems 0x4c1350 detaches the item's stat list and rebuilds
+    /// it through ITEM_ProcessSetItemEquip, and 0x4c15fd gates that on quality 5 — so what the
+    /// character is granted and what the item grants come apart for this one item class. These
+    /// tests pin the second, which is what every surface here reports.
     ///
-    /// Tal Rasha's Horadric Crest with an Um is the case a real capture pinned this on, and the one
-    /// reported. Its own set properties include `res-all 15`, which is EXACTLY what an Um gives a
-    /// helm — so the two are indistinguishable by eye, and the collision is the whole reason the
-    /// report read as "the socket stats are still there".
+    /// Tal Rasha's Horadric Crest with an Um is the case a real capture pinned it on. Its own set
+    /// properties include `res-all 15`, which is EXACTLY what an Um gives a helm, so the two MERGE
+    /// rather than appear twice — which makes the single number the decisive evidence about whether
+    /// the filler counted at all.
     /// </summary>
     public class WornSetItemSocketTests
     {
@@ -89,29 +90,29 @@ namespace D2ItemToolkit.Tests
         }
 
         [Fact]
-        public void A_worn_set_item_has_no_filler_to_move_and_grows_no_block()
+        public void A_worn_set_item_moves_its_filler_into_a_block_the_same_way()
         {
-            // Worn, the recalc has already thrown the Um away, so the merged render never showed
-            // its line — and the separated render must not invent one.
+            // Equipping the piece changes nothing about what its sockets contribute, so the worn
+            // render splits exactly as the carried one does.
             Unit worn = CrestWithUm(LocationEquipped);
 
-            Assert.DoesNotContain(
+            Assert.Contains(
                 "All Resistances +15", Sectioned(Engine.Render(worn), ItemTooltipSection.Modifiers));
 
-            Assert.Empty(
+            Assert.Equal(
+                new[] { "Um Rune", "All Resistances +15" },
                 Sectioned(Engine.Render(worn, null, Separated()),
                     ItemTooltipSection.SocketContribution));
         }
 
         /// <summary>
         /// The Crest's OWN `res-all 15` and an Um's `res-all 15` are the same four stats, so if the
-        /// rune applied they would MERGE rather than appear twice. That makes the single number the
-        /// decisive evidence about whether the filler counts: +15 means it does not, +30 means it
-        /// does. A reported tooltip read +15 with all six of the Crest's own properties present,
-        /// which is the worn case — the line is the set item's, not the rune's.
+        /// rune applied they MERGE rather than appear twice: +30 means the filler counted, +15 means
+        /// it did not. Both states read 30, which is the whole point — the game reads 15 when the
+        /// piece is worn, and that difference is reported rather than rendered.
         /// </summary>
         [Fact]
-        public void The_resistance_number_says_whether_the_rune_counted()
+        public void The_resistance_number_says_the_rune_counted_either_way()
         {
             int[] resists = { 39, 41, 43, 45 };
 
@@ -130,12 +131,12 @@ namespace D2ItemToolkit.Tests
                 crest.StatsLists.Add(own);
             }
 
-            Assert.Contains(
-                "All Resistances +15", Sectioned(Engine.Render(worn), ItemTooltipSection.Modifiers));
-
-            Assert.Contains(
-                "All Resistances +30",
-                Sectioned(Engine.Render(carried), ItemTooltipSection.Modifiers));
+            foreach (Unit crest in new[] { worn, carried })
+            {
+                Assert.Contains(
+                    "All Resistances +30",
+                    Sectioned(Engine.Render(crest), ItemTooltipSection.Modifiers));
+            }
         }
 
         /// <summary>

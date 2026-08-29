@@ -69,19 +69,14 @@ namespace D2ItemToolkit
     /// returned as well as the Defense 31 it already contributed to — because the tooltip draws it
     /// as its own line and a caller indexing modifiers needs to find it. Summing both would double
     /// count.
-    ///
-    /// Deliberately NOT the same question <see cref="TooltipEngine.Render"/> answers. See
-    /// <see cref="FillersIgnoredBecauseWorn"/>.
     /// </summary>
     public sealed class ItemMergedStats
     {
         internal ItemMergedStats(
             IReadOnlyList<MergedStat> stats,
-            bool fillersIgnoredBecauseWorn,
             IReadOnlyList<int> excludedPackedStats)
         {
             Stats = stats;
-            FillersIgnoredBecauseWorn = fillersIgnoredBecauseWorn;
             ExcludedPackedStats = excludedPackedStats;
         }
 
@@ -94,27 +89,6 @@ namespace D2ItemToolkit
         /// reads the same way to a summing consumer and keeps "absent" meaning one thing.
         /// </summary>
         public IReadOnlyList<MergedStat> Stats { get; private set; }
-
-        /// <summary>
-        /// True when this item is a set piece the wearer has EQUIPPED with something in its
-        /// sockets — the one case where these totals deliberately differ from what the game is
-        /// currently granting.
-        ///
-        /// ITEM_RecalcAllEquippedItems 0x4c1350 detaches a worn set item's stat list and rebuilds it
-        /// through ITEM_ProcessSetItemEquip, which re-applies only set state; nothing re-applies the
-        /// fillers. So the game really does grant a worn Tal Rasha's Horadric Crest with an Um in it
-        /// `All Resistances +15`, not 30, and <see cref="TooltipEngine.Render"/> reproduces that.
-        ///
-        /// These totals ignore it on purpose, because the useful question about a stored item is
-        /// what it WOULD give — an item must not drop out of a search because something equipped
-        /// it. This flag is how a caller knows to say so rather than reading as its own bug.
-        ///
-        /// Set only when the gems.txt SYNTHESIS actually contributed, which is the only part the
-        /// discard gates. A JEWEL's affixes arrive through the stat view, which
-        /// <see cref="TooltipEngine.Render"/> does not gate either, so a jewel-socketed worn set
-        /// piece leaves the two views in agreement and this stays false.
-        /// </summary>
-        public bool FillersIgnoredBecauseWorn { get; private set; }
 
         /// <summary>
         /// Stat ids left OUT of <see cref="Stats"/> because their value is a packed encoding rather

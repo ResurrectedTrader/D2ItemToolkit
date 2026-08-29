@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { TooltipEngine, unitFromJson, type Unit } from '../../../src/D2ItemToolkit.Ts/src/index.js';
-import { SocketStatSynthesis } from '../../../src/D2ItemToolkit.Ts/src/Stats/SocketStatSynthesis.js';
 
 /**
  * A client capture hands over gems and runes with an EMPTY stat chain: every caller of the
@@ -85,17 +84,15 @@ describe('socket stat synthesis', () => {
     expect(text).not.toContain('+20 to Dexterity');
   });
 
-  it('discards an equipped set item’s fillers, as the recalc does', () => {
+  it('still renders an equipped set item’s fillers', () => {
     // ITEM_RecalcAllEquippedItems 0x4c1350 ends with a loop over the eleven body slots that fires
     // only for quality 5 (0x4c15ec-0x4c162b). It calls STATLIST_RemoveFromOwnerAndRecalc
     // (0x4c1658), which detaches the item's whole stat list (0x6277fa -> STATLIST_DetachAndRecalc),
     // then rebuilds with ITEM_ApplySocketableAndEquipStats(wearer, THE SET ITEM, 0) at 0x4c1661 —
     // a2 is the set item, not a filler, so both IsOfType gates fail (0x4c0d30 / 0x4c0da3) and it
-    // lands on ITEM_ProcessSetItemEquip. The fillers are never re-applied.
+    // lands on ITEM_ProcessSetItemEquip. The fillers are never re-applied, so the GAME draws 15.
     //
-    // A real capture is what caught it: Tal Rasha's Horadric Crest with an Um in it draws
-    // `All Resistances +15` — its own set property alone — while a runeword shield in the same
-    // snapshot draws all three of its runes' mods.
+    // We draw what the item grants, which does not change when something equips it.
     const worn = unitFromJson({
       unitType: 4,
       classId: classId('xsk'),
@@ -106,36 +103,25 @@ describe('socket stat synthesis', () => {
       items: [{ unitType: 4, classId: classId('r22') }],
     });
 
-    expect(TooltipEngine.embedded.renderSetItem(worn, { isEquipped: true }).text).not.toContain(
-      'All Resistances',
-    );
-
-    // Not equipped, so the loop never ran and Um's helm mod is still on it.
-    expect(TooltipEngine.embedded.renderSetItem(worn, { isEquipped: false }).text).toContain(
-      'All Resistances +15',
-    );
+    for (const isEquipped of [true, false]) {
+      expect(TooltipEngine.embedded.renderSetItem(worn, { isEquipped }).text).toContain(
+        'All Resistances +15',
+      );
+    }
   });
 
-  it('loses fillers that way only for a SET item', () => {
-    // 0x4c1614 gates the loop on GetItemQuality == 5. A normal-quality host keeps its fillers
-    // however it is carried — which is why the two runeword items in the same capture render their
-    // runes and the set item does not.
-    expect(SocketStatSynthesis.fillersAreDiscardedByRecalc(host('urg', 'r18'), true)).toBe(false);
+  it('never changes the synthesis with how the host is carried', () => {
+    // Nothing gates the synthesis on where the item sits. The GAME gates its own on quality 5 and
+    // equipped (0x4c15fd), which is the divergence the README documents; here the two renders have
+    // to be character for character the same.
+    const worn = host('urg', 'r18');
+    worn.location = 1;
 
-    expect(
-      SocketStatSynthesis.fillersAreDiscardedByRecalc(
-        unitFromJson({ unitType: 4, quality: 5, itemFlags: 16 }),
-        true,
-      ),
-    ).toBe(true);
+    const stashed = host('urg', 'r18');
+    stashed.location = 3;
 
-    // 0x4c1618 / 0x4c1628 exclude a broken item and flag 0x4000.
-    expect(
-      SocketStatSynthesis.fillersAreDiscardedByRecalc(
-        unitFromJson({ unitType: 4, quality: 5, itemFlags: 272 }),
-        true,
-      ),
-    ).toBe(false);
+    expect(render(worn)).toBe(render(stashed));
+    expect(render(worn)).toContain('+10 to Dexterity');
   });
 
   it('never synthesises for a jewel', () => {

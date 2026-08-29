@@ -166,28 +166,6 @@ export interface TooltipOptions {
   showItemLevel?: boolean;
 
   /**
-   * False renders a WORN set piece as though its socket fillers still applied.
-   *
-   * ITEM_RecalcAllEquippedItems 0x4c1350 detaches an equipped set item's stat list and rebuilds it
-   * through ITEM_ProcessSetItemEquip; nothing re-applies the fillers, so the game grants a worn Tal
-   * Rasha's Horadric Crest with an Um in it `All Resistances +15` rather than 30. Reproducing that
-   * is the DEFAULT and stays the default.
-   *
-   * Turn it off when the question is "what is this item worth" rather than "what is it giving right
-   * now" — a stash or mule view, where an item must not appear to lose its rune because something
-   * equipped it. That is the position `mergedStats` takes unconditionally; this is the same choice,
-   * made explicit for the render.
-   *
-   * It affects the FILLERS only. Whether the piece is equipped still decides the full-set block, the
-   * worn mask that lights the bonus tiers, and the piece list's colours, because those are facts
-   * about the wearer rather than about the sockets.
-   *
-   * Like `sockets: 'separated'` and a non-null `ranges`, false is a deliberate departure from what
-   * the game draws.
-   */
-  applyWornSetDiscard?: boolean;
-
-  /**
    * The CLIENT PLAYER, when that is a different unit from the viewer — i.e. a mercenary's panel.
    * Almost every caller leaves this unset.
    *
@@ -344,7 +322,7 @@ function socketContributions(item: Unit, synthesis: SocketStatSynthesis): Map<nu
   }
 
   // Same reason as in compose: a captured gem or rune has no chain of its own.
-  for (const [key, value] of synthesis.contributions(item, false)) {
+  for (const [key, value] of synthesis.contributions(item)) {
     const existing = merged.get(key);
     merged.set(key, existing === undefined ? value : Int32.of(existing + value));
   }
@@ -475,12 +453,7 @@ export class TooltipEngine {
     // location test, so this costs nothing on the common path.
     const set = this.setStateOf(item, viewer);
 
-    // FILLER discard only. `set` keeps the real equipped state, because that is what the full-set
-    // block, the worn mask and the piece colours read — gating those on this option would
-    // reproduce, inside the library, exactly the bug that faking location causes outside it.
-    const discardFillers = (set.isEquipped ?? false) && (options.applyWornSetDiscard ?? true);
-
-    const composed = this.compose(item, viewer, options, includeSockets, discardFillers);
+    const composed = this.compose(item, viewer, options, includeSockets);
 
     // Installed BEFORE composing, because the annotation is written into each line's text as it is
     // built rather than patched onto the finished list.
@@ -506,7 +479,7 @@ export class TooltipEngine {
     }
 
     if ((options.sockets ?? 'merged') === 'separated') {
-      lines = this.withSocketBlocks(item, viewer, options, lines, discardFillers);
+      lines = this.withSocketBlocks(item, viewer, options, lines);
     }
 
     return TooltipEngine.tooltip(composed, lines, TooltipEngine.lengthCapFor(composed.kind));
@@ -526,20 +499,16 @@ export class TooltipEngine {
    * Appends one block per filler BELOW the item. Lines are in display order, so appending puts them
    * at the bottom, which is where a reader expects "and this is what the gems are doing".
    *
-   * `hostIsEquipped` must be the same value `compose` was given. This mode MOVES the fillers out of
-   * the item's block; it must never ADD anything the merged render would not have shown. A worn set
-   * item's fillers are discarded by recalc (see `SocketStatSynthesis.fillersAreDiscardedByRecalc`),
-   * so they are absent from the item's block, and a block listing them below it would claim the
-   * item grants stats it does not.
+   * This mode MOVES the fillers out of the item's block rather than adding to it, so the selection
+   * here has to be the same one `compose` merged.
    */
   private withSocketBlocks(
     item: Unit,
     viewer: Unit | null,
     options: TooltipOptions,
     body: readonly ItemTooltipLine[],
-    hostIsEquipped: boolean,
   ): readonly ItemTooltipLine[] {
-    const slot = this.socketStats.slotFor(item, hostIsEquipped);
+    const slot = this.socketStats.slotFor(item);
     if (slot < 0) {
       return body;
     }
@@ -726,9 +695,7 @@ export class TooltipEngine {
     host: Unit,
     options: TooltipOptions,
   ): (shownStats: readonly number[], layer: number) => string | null {
-    // The socket bucket of a breakdown is what the fillers are worth, not what a recalc has
-    // currently left on the item.
-    const slot = this.socketStats.slotFor(host, false);
+    const slot = this.socketStats.slotFor(host);
     const properties: ItemProperty[] = [];
     const byKey = new Map<number, RolledStatRange>();
 
@@ -830,8 +797,7 @@ export class TooltipEngine {
 
     const includeSockets = (options.sockets ?? 'merged') === 'merged';
 
-    const discardFillers = (set.isEquipped ?? false) && (options.applyWornSetDiscard ?? true);
-    const composed = this.compose(item, viewer, options, includeSockets, discardFillers);
+    const composed = this.compose(item, viewer, options, includeSockets);
 
     if (composed.kind !== ItemTooltipKind.IdentifiedSetItem) {
       throw new NotSupportedException(
@@ -850,7 +816,7 @@ export class TooltipEngine {
     let lines = this.setItemLines(item, viewer, composed, set);
 
     if ((options.sockets ?? 'merged') === 'separated') {
-      lines = this.withSocketBlocks(item, viewer, options, lines, discardFillers);
+      lines = this.withSocketBlocks(item, viewer, options, lines);
     }
 
     return TooltipEngine.tooltip(composed, lines, ItemTooltipComposer.UnlimitedTooltipLength);
@@ -1170,8 +1136,7 @@ export class TooltipEngine {
    * than 121.
    *
    * Set BONUSES are excluded by default — they belong to the wearer's other pieces rather than to
-   * this item — and the worn-set filler discard is deliberately ignored; see
-   * `ItemMergedStats.fillersIgnoredBecauseWorn`.
+   * this item.
    */
   // Pass an ITEM. `Unit.items` carries two relations — socket fillers on an item, carried gear on
   // a wearer — and this reads it as the first, so handing it a PLAYER folds every carried item in
@@ -1195,13 +1160,8 @@ export class TooltipEngine {
     let merged = ItemStatReader.reconstructView(item, view);
     const baseStats = ItemStatReader.reconstructView(item, ItemStatView.baseOnly());
 
-    // hostIsEquipped FALSE on purpose. render passes the item's real state here, which is what
-    // correctly gives a worn set piece none of its fillers; these totals answer what the item WOULD
-    // grant, so an item cannot drop out of a search because something equipped it.
-    let synthesised: ReadonlyMap<number, number> = new Map<number, number>();
     if (includeSockets) {
-      synthesised = this.socketStats.contributions(item, false);
-      merged = addInto(merged, synthesised);
+      merged = addInto(merged, this.socketStats.contributions(item));
     }
 
     // dropPercents false: `ac%` and the enhanced-damage pair are drawn as their own lines, so a
@@ -1225,13 +1185,8 @@ export class TooltipEngine {
       }
     }
 
-    // What the SYNTHESIS contributed, not merely that a filler exists: only the synthesis is gated
-    // on the recalc discard, so a socketed JEWEL leaves the two views in agreement.
     return {
       stats,
-      fillersIgnoredBecauseWorn:
-        synthesised.size !== 0 &&
-        SocketStatSynthesis.fillersAreDiscardedByRecalc(item, item.location === LocationEquipped),
       excludedPackedStats: [...packed].sort((a, b) => a - b),
     };
   }
@@ -1251,9 +1206,7 @@ export class TooltipEngine {
     requireUnit(filler, 'filler');
     requireUnit(host, 'host');
 
-    // Not the host's real equipped state, matching mergedStats: the question is what the filler
-    // contributes, not whether a recalc has currently thrown it away.
-    const slot = this.socketStats.slotFor(host, false);
+    const slot = this.socketStats.slotFor(host);
     if (slot < 0) {
       return [];
     }
@@ -1342,9 +1295,9 @@ export class TooltipEngine {
    * "Fire Resist +28% [11-20]", where 28 was item plus jewel but 11-20 was the item alone.
    */
   private allSocketProperties(item: Unit): ItemProperty[] {
-    const properties: ItemProperty[] = [...this.socketStats.fillerProperties(item, false)];
+    const properties: ItemProperty[] = [...this.socketStats.fillerProperties(item)];
 
-    const slot = this.socketStats.slotFor(item, false);
+    const slot = this.socketStats.slotFor(item);
     if (slot < 0) {
       return properties;
     }
@@ -1449,7 +1402,6 @@ export class TooltipEngine {
     viewer: Unit | null,
     options: TooltipOptions,
     includeSockets: boolean,
-    hostIsEquipped = false,
   ): Composed {
     const identity = ItemRecordReader.readIdentity(item);
     const player: ItemViewer | null = viewer === null ? null : ItemRecordReader.readViewer(viewer);
@@ -1467,7 +1419,7 @@ export class TooltipEngine {
     // D2Common/D2Game and the client only ever sees the host's merged result. Rebuild them from
     // gems.txt so the host's blue block is not silently short of its fillers.
     if (includeSockets) {
-      const synthesised = this.socketStats.contributions(item, hostIsEquipped);
+      const synthesised = this.socketStats.contributions(item);
       stats = addInto(stats, synthesised);
       modifierStats = addInto(modifierStats, synthesised);
     }

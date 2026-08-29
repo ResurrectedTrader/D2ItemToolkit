@@ -72,7 +72,6 @@ interface PackedRanges {
 /** The `mergedStats` object, as `PackMergedStats` in tools/Reference/Program.cs emits it. */
 interface PackedMergedStats {
   stats: { stat: number; layer: number; value: number }[];
-  fillersIgnoredBecauseWorn: boolean;
   excludedPackedStats: number[];
 }
 
@@ -300,6 +299,34 @@ describe('corpus', () => {
     expect(breakdowns.some(b => b.sockets.some(l => l.includes('[')))).toBe(true);
   });
 
+  it('reaches a socketed set piece both worn and carried', () => {
+    // The corpus has to hold a worn socketed SET item, because that is the one shape the game
+    // treats specially (0x4c15fd) and so the one shape where an engine could plausibly grow a
+    // discard on one side only. Both states need a case or half of it is unpoliced.
+    const named = new Map(expected.map(c => [c.name, c]));
+
+    const worn = named.get('set-socketed-um-worn');
+    const bag = named.get('set-socketed-um-bag');
+
+    expect(worn, 'set-socketed-um-worn').toBeDefined();
+    expect(bag, 'set-socketed-um-bag').toBeDefined();
+
+    // The Um's line is present either way. This is what fails if an engine reintroduces the
+    // discard, and it is compared C# against TS by the layer walk below.
+    for (const c of [worn, bag]) {
+      expect((c?.rendered ?? '').includes('All Resistances +15'), c?.name).toBe(true);
+    }
+
+    // And the totals do not move either, so no surface disagrees with another about it.
+    const resists = (c?: ExpectedCase): number[] =>
+      (c?.mergedStats?.stats ?? [])
+        .filter(s => [39, 41, 43, 45].includes(s.stat))
+        .map(s => s.value);
+
+    expect(resists(worn)).toEqual(resists(bag));
+    expect(resists(worn)).not.toEqual([]);
+  });
+
   it('covers a filler that carries its own rolled affixes', () => {
     // A jewel contributes nothing through gems.txt, so its roll reaches the host only through its
     // own affixes. Without a case like this the summing — merged span = item + jewel, each split
@@ -379,7 +406,7 @@ describe.skipIf(!engineReady)('the two implementations agree', () => {
         // differential — no rendering path reaches them.
         'ranges',
         // The merged TOTALS. Nothing above reaches them: they fold the gems.txt synthesis and
-        // op 13 into one view and ignore the worn-set discard, which no render path does.
+        // op 13 into one view, which no render path does.
         'mergedStats',
         // The two opt-in render modes. Their formatter, colour wrapping and block layout are
         // otherwise covered only by hand-written tests on each side, which cannot catch the two

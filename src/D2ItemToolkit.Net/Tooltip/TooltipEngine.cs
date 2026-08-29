@@ -130,13 +130,7 @@ namespace D2ItemToolkit
             // exits SetStateOf after the Location test, so this costs nothing on the common path.
             SetItemTooltipInput set = SetStateOf(item, viewer);
 
-            // FILLER discard only. `set` keeps the real equipped state, because that is what the
-            // full-set block, the worn mask and the piece colours read — gating those on this
-            // option would reproduce, inside the library, exactly the bug that faking Location
-            // causes outside it.
-            bool discardFillers = set.IsEquipped && opts.ApplyWornSetDiscard;
-
-            Composed composed = Compose(item, viewer, opts, includeSockets, discardFillers);
+            Composed composed = Compose(item, viewer, opts, includeSockets);
 
             // Installed BEFORE composing, because the annotation is written into each line's text
             // as it is built rather than patched onto the finished list.
@@ -165,7 +159,7 @@ namespace D2ItemToolkit
 
             if (opts.Sockets == SocketMode.Separated)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines, discardFillers);
+                lines = WithSocketBlocks(item, viewer, opts, lines);
             }
 
             return new Tooltip(
@@ -177,21 +171,16 @@ namespace D2ItemToolkit
         /// puts them at the bottom, which is where a reader expects "and this is what the gems are
         /// doing".
         ///
-        /// <paramref name="hostIsEquipped"/> must be the same value <see cref="Compose"/> was given.
-        /// This mode MOVES the fillers out of the item's block; it must never ADD anything the
-        /// merged render would not have shown. A worn set item's fillers are discarded by recalc
-        /// (see <see cref="SocketStatSynthesis.FillersAreDiscardedByRecalc"/>), so they are absent
-        /// from the item's block, and a block listing them below it would claim the item grants
-        /// stats it does not.
+        /// This mode MOVES the fillers out of the item's block rather than adding to it, so the
+        /// selection here has to be the same one <see cref="Compose"/> merged.
         /// </summary>
         private IReadOnlyList<ItemTooltipLine> WithSocketBlocks(
             IUnit item,
             IUnit viewer,
             TooltipOptions options,
-            IReadOnlyList<ItemTooltipLine> body,
-            bool hostIsEquipped)
+            IReadOnlyList<ItemTooltipLine> body)
         {
-            int slot = _socketStats.SlotFor(item, hostIsEquipped);
+            int slot = _socketStats.SlotFor(item);
             if (slot < 0)
             {
                 return body;
@@ -278,9 +267,7 @@ namespace D2ItemToolkit
         private Func<IReadOnlyList<int>, int, string> BuildSocketRangeAnnotation(
             IUnit host, TooltipOptions options)
         {
-            // The socket bucket of a breakdown is what the fillers are worth, not what a recalc
-            // has currently left on the item.
-            int slot = _socketStats.SlotFor(host, false);
+            int slot = _socketStats.SlotFor(host);
 
             var properties = new List<ItemProperty>();
             var byKey = new Dictionary<int, RolledStatRange>();
@@ -683,8 +670,7 @@ namespace D2ItemToolkit
 
             TooltipOptions opts = options ?? TooltipOptions.Default;
             bool includeSockets = opts.Sockets == SocketMode.Merged;
-            bool discardFillers = set.IsEquipped && opts.ApplyWornSetDiscard;
-            Composed composed = Compose(item, viewer, opts, includeSockets, discardFillers);
+            Composed composed = Compose(item, viewer, opts, includeSockets);
 
             if (composed.Kind != ItemTooltipKind.IdentifiedSetItem)
             {
@@ -705,7 +691,7 @@ namespace D2ItemToolkit
 
             if (opts.Sockets == SocketMode.Separated)
             {
-                lines = WithSocketBlocks(item, viewer, opts, lines, discardFillers);
+                lines = WithSocketBlocks(item, viewer, opts, lines);
             }
 
             return new Tooltip(
@@ -874,8 +860,7 @@ namespace D2ItemToolkit
         /// affixes with the total written down nowhere, so `31` reads 76 and 45 rather than 121.
         ///
         /// Set BONUSES are excluded by default — they belong to the wearer's other pieces rather
-        /// than to this item — and the worn-set filler discard is deliberately ignored; see
-        /// <see cref="ItemMergedStats.FillersIgnoredBecauseWorn"/>.
+        /// than to this item.
         /// </summary>
         /// <remarks>
         /// Pass an ITEM. `IUnit.Items` carries two relations — socket fillers on an item, carried
@@ -903,15 +888,9 @@ namespace D2ItemToolkit
             SortedDictionary<int, int> baseStats =
                 ItemStatReader.ReconstructView(item, ItemStatView.BaseOnly());
 
-            // hostIsEquipped FALSE on purpose. Render passes the item's real state here, which is
-            // what correctly gives a worn set piece none of its fillers; these totals answer what
-            // the item WOULD grant, so an item cannot drop out of a search because something
-            // equipped it.
-            var synthesised = new SortedDictionary<int, int>();
             if (opts.IncludeSockets)
             {
-                synthesised = _socketStats.Contributions(item, false);
-                AddInto(merged, synthesised);
+                AddInto(merged, _socketStats.Contributions(item));
             }
 
             // dropPercents false: `ac%` and the enhanced-damage pair are drawn as their own lines,
@@ -938,14 +917,7 @@ namespace D2ItemToolkit
                 }
             }
 
-            // What the SYNTHESIS contributed, not merely that a filler exists: only the synthesis
-            // is gated on the recalc discard, so a socketed JEWEL leaves the two views in agreement.
-            return new ItemMergedStats(
-                stats,
-                synthesised.Count != 0
-                    && SocketStatSynthesis.FillersAreDiscardedByRecalc(
-                        item, item.Location == LocationEquipped),
-                new List<int>(packed));
+            return new ItemMergedStats(stats, new List<int>(packed));
         }
 
         /// <summary>
@@ -966,8 +938,7 @@ namespace D2ItemToolkit
             if (host == null) throw new ArgumentNullException("host");
 
             // Not the host's real equipped state, matching MergedStats: the question is what the
-            // filler contributes, not whether a recalc has currently thrown it away.
-            int slot = _socketStats.SlotFor(host, false);
+            int slot = _socketStats.SlotFor(host);
             if (slot < 0)
             {
                 return new MergedStat[0];
@@ -1129,9 +1100,9 @@ namespace D2ItemToolkit
         /// </summary>
         private List<ItemProperty> AllSocketProperties(IUnit item)
         {
-            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item, false));
+            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item));
 
-            int slot = _socketStats.SlotFor(item, false);
+            int slot = _socketStats.SlotFor(item);
             if (slot < 0)
             {
                 return properties;
@@ -1179,7 +1150,7 @@ namespace D2ItemToolkit
             }
 
             // Same reason as in Compose: a captured gem or rune has no chain of its own.
-            AddInto(merged, _socketStats.Contributions(item, false));
+            AddInto(merged, _socketStats.Contributions(item));
 
             return merged;
         }
@@ -1241,8 +1212,7 @@ namespace D2ItemToolkit
         }
 
         private Composed Compose(
-            IUnit item, IUnit viewer, TooltipOptions options, bool includeSockets,
-            bool hostIsEquipped = false)
+            IUnit item, IUnit viewer, TooltipOptions options, bool includeSockets)
         {
             ItemIdentity identity = ItemRecordReader.ReadIdentity(item);
             ItemViewer player = viewer == null ? null : ItemRecordReader.ReadViewer(viewer);
@@ -1263,8 +1233,7 @@ namespace D2ItemToolkit
             // them from gems.txt so the host's blue block is not silently short of its fillers.
             if (includeSockets)
             {
-                SortedDictionary<int, int> synthesised =
-                    _socketStats.Contributions(item, hostIsEquipped);
+                SortedDictionary<int, int> synthesised = _socketStats.Contributions(item);
                 AddInto(stats, synthesised);
                 AddInto(modifierStats, synthesised);
             }
@@ -1473,28 +1442,6 @@ namespace D2ItemToolkit
         /// Only lines that display one stat are annotated: every modifier, plus the Defense line.
         /// </summary>
         public RangeDisplay Ranges;
-
-        /// <summary>
-        /// False renders a WORN set piece as though its socket fillers still applied.
-        ///
-        /// ITEM_RecalcAllEquippedItems 0x4c1350 detaches an equipped set item's stat list and
-        /// rebuilds it through ITEM_ProcessSetItemEquip; nothing re-applies the fillers, so the game
-        /// grants a worn Tal Rasha's Horadric Crest with an Um in it `All Resistances +15` rather
-        /// than 30. Reproducing that is the DEFAULT and stays the default.
-        ///
-        /// Turn it off when the question is "what is this item worth" rather than "what is it giving
-        /// right now" — a stash or mule view, where an item must not appear to lose its rune because
-        /// something equipped it. That is the position <see cref="TooltipEngine.MergedStats"/> takes
-        /// unconditionally; this is the same choice, made explicit for the render.
-        ///
-        /// It affects the FILLERS only. Whether the piece is equipped still decides the full-set
-        /// block, the worn mask that lights the bonus tiers, and the piece list's colours, because
-        /// those are facts about the wearer rather than about the sockets.
-        ///
-        /// Like <see cref="SocketMode.Separated"/> and a non-null <see cref="Ranges"/>, false is a
-        /// deliberate departure from what the game draws.
-        /// </summary>
-        public bool ApplyWornSetDiscard = true;
 
         /// <summary>
         /// The CLIENT PLAYER, when that is a different unit from the viewer — i.e. a mercenary's
