@@ -56,7 +56,7 @@ namespace D2ItemToolkit
             }
 
             int[] tiers = _maxSock[itemTypeRow];
-            return itemLevel <= 25 ? tiers[0] : (itemLevel <= 40 ? tiers[1] : tiers[2]);
+            return itemLevel <= tiers[3] ? tiers[0] : (itemLevel <= tiers[4] ? tiers[1] : tiers[2]);
         }
 
         private readonly int[][] _maxSock;
@@ -67,15 +67,30 @@ namespace D2ItemToolkit
 
             int rows = itemTypes.RowCount;
 
+            // D2R renamed the tiers and made the two level thresholds data (ITEMS_GetMaxSockets
+            // 0x14022bc50: MaxSockets1..3, MaxSocketsLevelThreshold1/2); every shipped row still
+            // says 25 and 40. Its level clamp to 1 cannot move a tier, so it is not modelled.
+            bool resurrected = itemTypes.HasColumn("MaxSockets1");
             _maxSock = new int[rows][];
             for (int row = 0; row < rows; ++row)
             {
-                _maxSock[row] = new[]
-                {
-                    itemTypes.GetInt(row, "MaxSock1"),
-                    itemTypes.GetInt(row, "MaxSock25"),
-                    itemTypes.GetInt(row, "MaxSock40"),
-                };
+                _maxSock[row] = resurrected
+                    ? new[]
+                    {
+                        itemTypes.GetInt(row, "MaxSockets1"),
+                        itemTypes.GetInt(row, "MaxSockets2"),
+                        itemTypes.GetInt(row, "MaxSockets3"),
+                        itemTypes.GetInt(row, "MaxSocketsLevelThreshold1"),
+                        itemTypes.GetInt(row, "MaxSocketsLevelThreshold2"),
+                    }
+                    : new[]
+                    {
+                        itemTypes.GetInt(row, "MaxSock1"),
+                        itemTypes.GetInt(row, "MaxSock25"),
+                        itemTypes.GetInt(row, "MaxSock40"),
+                        25,
+                        40,
+                    };
             }
 
             _throwable = new bool[rows];

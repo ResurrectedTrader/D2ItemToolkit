@@ -25,6 +25,22 @@ namespace D2ItemToolkit
         // class). Anything at 7 or above HALTS the game rather than falling back.
         public static readonly int[] ClassName = { 4011, 4010, 4009, 4008, 4007, 10097, 10098 };
 
+        // D2R's ear switch gains the Warlock (27567); 8 and above append nothing.
+        public static readonly int[] ResurrectedClassName =
+        {
+            4011, 4010, 4009, 4008, 4007, 10097, 10098, 27567,
+        };
+
+        // ITEMS_GetName 0x1401587ff: a one-affix magic name has its own format, by key.
+        public const string MagicPrefixOnlyKey = "ItemNameMagicFormatPrefixOnly";
+        public const string MagicSuffixOnlyKey = "ItemNameMagicFormatSuffixOnly";
+
+        // D2R's per-table miss ids for the name keys resolved after load (0x140215973 and
+        // siblings): affix, low-quality and rune names fall to strMissingString, unique and set
+        // `index` cells to 5383.
+        public const int MissingString = 11078;
+        public const int MissingIndexName = 5383;
+
         // 0x48c542: tome versus scroll, by magic suffix. Suffix 0 and 1 are the only ones handled;
         // anything else leaves the switch having written NOTHING.
         public const int TomeFirst = 2199;
@@ -51,6 +67,10 @@ namespace D2ItemToolkit
         private readonly D2DataFiles _data;
         private readonly ItemTable _items;
         private readonly ItemTypeTree _types;
+        private readonly bool _resurrected;
+
+        // The D2R locale setting, which picks the possessive form.
+        private readonly string _language;
 
         public ItemNameBuilder(D2DataFiles data, ItemTable items, ItemTypeTree types = null)
         {
@@ -60,6 +80,8 @@ namespace D2ItemToolkit
             _data = data;
             _items = items;
             _types = types ?? (data.ItemTypes == null ? null : new ItemTypeTree(data.ItemTypes));
+            _resurrected = data.IsResurrected;
+            _language = data.ResurrectedLanguage ?? "enUS";
         }
 
         // Returns the name, or null when the arm writes nothing. Runeword handling and the two-line
@@ -80,7 +102,17 @@ namespace D2ItemToolkit
 
             // 0x48caff: INV_FormatPlayerNameOnItem rewrites the WHOLE buffer, whichever arm built
             // it — including the unidentified one, which reaches the tail through 0x48ce54.
-            return PersonalizeWholeName(item, name);
+            name = PersonalizeWholeName(item, name);
+
+            // 0x14015847c: items.txt ShowLevel appends " (N)", with a level below 1 written back
+            // as 1. No shipped row sets it.
+            if (_resurrected && name != null && _items.GetInt(item.ClassId, "ShowLevel") != 0)
+            {
+                name += Str(DescStringIds.Space)
+                        + CFormat.Sprintf("(%i)", item.ItemLevel < 1 ? 1 : item.ItemLevel);
+            }
+
+            return name;
         }
 
         private string Arm(ItemIdentity item, string baseName, int filledSockets)
@@ -96,14 +128,20 @@ namespace D2ItemToolkit
             // rather than through the affix tables (0x48c17a/0x48c17f/0x48c181).
             if (item.Has(ItemRecordFlags.Runeword))
             {
-                return baseName + Str(DescStringIds.Newline)
-                       + ItemTooltipColor.Marker + "4" + Str(item.MagicPrefix[0]);
+                // 0x140157a4a: D2R drops the base line for a UI preview item (flag bit 31).
+                string runeword = ItemTooltipColor.Marker + "4" + Str(item.MagicPrefix[0]);
+                if (_resurrected && ((uint)item.Flags & PreviewFlag) != 0)
+                {
+                    return runeword;
+                }
+
+                return Strip(baseName) + Str(DescStringIds.Newline) + runeword;
             }
 
             // 0x48c1f1: unidentified items show the base name only, whatever the quality.
             if (!item.Has(ItemRecordFlags.Identified))
             {
-                return baseName;
+                return Strip(baseName);
             }
 
             switch (item.Quality)
@@ -140,7 +178,7 @@ namespace D2ItemToolkit
         /// unique, crafted and tempered personalise inside their own arms instead, through
         /// INV_FormatPlayerNameWithBase. The budget is 512 wide characters, not the ear's 100.
         /// </summary>
-        private static string PersonalizeWholeName(ItemIdentity item, string name)
+        private string PersonalizeWholeName(ItemIdentity item, string name)
         {
             if (name == null || !item.Has(ItemRecordFlags.Personalized))
             {
@@ -155,6 +193,8 @@ namespace D2ItemToolkit
             return Possessive(item.PlayerName, name, WholeNameBudget);
         }
 
+        private const uint PreviewFlag = 0x80000000;
+
         private const int WholeNameBudget = 512;
 
         /// <summary>
@@ -163,7 +203,7 @@ namespace D2ItemToolkit
         /// personalized flag alone (0x484d94 versus 0x484da0) — the arms branch on that, not on
         /// whether the possessive fitted the budget.
         /// </summary>
-        private static bool TryPersonalizePart(ItemIdentity item, string part, out string named)
+        private bool TryPersonalizePart(ItemIdentity item, string part, out string named)
         {
             if (!item.Has(ItemRecordFlags.Personalized))
             {
@@ -201,7 +241,7 @@ namespace D2ItemToolkit
                 return Format2(NameStringIds.GemmedFormat, Str(NameStringIds.Gemmed), baseName);
             }
 
-            return baseName;
+            return Strip(baseName);
         }
 
         /// <summary>
@@ -233,7 +273,11 @@ namespace D2ItemToolkit
         /// </summary>
         private string TomeOrScroll(ItemIdentity item)
         {
-            bool tome = IsOfType(item, "book");
+            // D2R decides by the PRIMARY type word == 18 (0x14015788b), not an IsOfType walk; on
+            // shipped data the two agree.
+            bool tome = _resurrected
+                ? _types != null && _types.Row(_items.PrimaryTypeCode(item.ClassId)) == _types.Row("book")
+                : IsOfType(item, "book");
 
             switch (item.MagicSuffix[0])
             {
@@ -268,15 +312,23 @@ namespace D2ItemToolkit
                 text.Append(Str(NameStringIds.EarHardcore)).Append(newline);
             }
 
+            // D2R prints the level with snprintf into 3 bytes, so two characters at most.
+            string level = item.EarLevel.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (_resurrected && level.Length > 2)
+            {
+                level = level.Substring(0, 2);
+            }
+
             text.Append(Str(NameStringIds.EarLevelLabel))
                 .Append(Str(DescStringIds.Space))
-                .Append(item.EarLevel)
+                .Append(level)
                 .Append(newline);
 
             // 0x48c3b9: the ear's fileIndex IS the dead player's class.
-            if (item.FileIndex >= 0 && item.FileIndex < NameStringIds.ClassName.Length)
+            int[] classNames = _resurrected ? NameStringIds.ResurrectedClassName : NameStringIds.ClassName;
+            if (item.FileIndex >= 0 && item.FileIndex < classNames.Length)
             {
-                text.Append(Str(NameStringIds.ClassName[item.FileIndex])).Append(newline);
+                text.Append(Str(classNames[item.FileIndex])).Append(newline);
             }
 
             return text.Append(Possessive(item.PlayerName, baseName, EarBudget)).ToString();
@@ -293,8 +345,13 @@ namespace D2ItemToolkit
         /// When the two names together would not fit the caller's 100 wide characters it drops the
         /// possessive and yields the base name alone (0x5272f6).
         /// </summary>
-        private static string Possessive(string owner, string baseName, int budget)
+        private string Possessive(string owner, string baseName, int budget)
         {
+            if (_resurrected)
+            {
+                return ResurrectedPossessive(owner ?? string.Empty, baseName);
+            }
+
             if (string.IsNullOrEmpty(owner))
             {
                 return baseName;
@@ -307,6 +364,67 @@ namespace D2ItemToolkit
             }
 
             return owner + "'s " + baseName;
+        }
+
+        private const int ResurrectedPossessiveBudget = 0x400;
+
+        /// <summary>
+        /// sub_140478a70, switched on STRTABLE_GetLanguage for the locale SETTING (jump table
+        /// 0x140478b31). The tests are on the owner's raw first or last byte, case-sensitive. One
+        /// 1024-byte budget for every caller, and no empty-owner shortcut.
+        /// </summary>
+        private string ResurrectedPossessive(string owner, string baseName)
+        {
+            if (Utf8Length(baseName) + Utf8Length(owner) + 5 > ResurrectedPossessiveBudget)
+            {
+                return Utf8Length(baseName) < ResurrectedPossessiveBudget ? baseName : string.Empty;
+            }
+
+            char last = owner.Length == 0 ? '\0' : owner[owner.Length - 1];
+            char first = owner.Length == 0 ? '\0' : owner[0];
+
+            switch (_language)
+            {
+                case "enUS":
+                    return owner + (last == 's' ? "' " : "'s ") + baseName;
+                case "deDE":
+                    return owner + (last == 's' || last == 'z' ? "' " : "s ") + baseName;
+                case "esES":
+                case "esMX":
+                    return baseName + " de " + owner;
+                case "frFR":
+                    // " d'" carries no trailing space (0x1416480a0).
+                    return baseName + ("aeiou".IndexOf(first) >= 0 && first != '\0' ? " d'" : " de ") + owner;
+                case "itIT":
+                    return baseName + " di " + owner;
+                case "jaJP":
+                    return owner + baseName;
+                case "plPL":
+                    // No space before the bracket and one after it (0x140478ed0-0x140478fdb).
+                    return baseName + "(" + owner + ") ";
+                default:
+                    return "(" + owner + ") " + baseName;
+            }
+        }
+
+        private static int Utf8Length(string text)
+        {
+            return Encoding.UTF8.GetByteCount(text ?? string.Empty);
+        }
+
+        /// <summary>
+        /// D2R strips a leading grammar tag such as "[fs]" from a name before showing it: the last
+        /// ']' with a '[' three characters before it. No enUS name carries one.
+        /// </summary>
+        private string Strip(string name)
+        {
+            if (!_resurrected || string.IsNullOrEmpty(name))
+            {
+                return name;
+            }
+
+            int close = name.LastIndexOf(']');
+            return close >= 3 && name[close - 3] == '[' ? name.Substring(close + 1) : name;
         }
 
         private bool IsOfType(ItemIdentity item, string code)
@@ -332,7 +450,7 @@ namespace D2ItemToolkit
                 return null;
             }
 
-            string prefix = TxtKeys.Text(table, item.FileIndex, "Name", _data.Strings);
+            string prefix = NameText(table, item.FileIndex, "Name", NameStringIds.MissingString);
             return Format2(NameStringIds.LowQualityFormat, prefix, baseName);
         }
 
@@ -342,7 +460,60 @@ namespace D2ItemToolkit
             string prefix = MagicAffix(item.MagicPrefix[0]);
             string suffix = MagicAffix(item.MagicSuffix[0]);
 
+            // ITEMS_GetName 0x1401587ff-0x140158b06: a one-affix name has its own two-slot format,
+            // so D2R has no stray space. "Has" is the record lookup succeeding (id in range), not
+            // the text being non-empty.
+            if (_resurrected)
+            {
+                bool hasPrefix = MagicAffixExists(item.MagicPrefix[0]);
+                bool hasSuffix = MagicAffixExists(item.MagicSuffix[0]);
+
+                if (hasPrefix && !hasSuffix)
+                {
+                    return ResurrectedFormat(
+                        _data.Strings.GetByKey(NameStringIds.MagicPrefixOnlyKey), prefix, baseName);
+                }
+
+                if (hasSuffix && !hasPrefix)
+                {
+                    return ResurrectedFormat(
+                        _data.Strings.GetByKey(NameStringIds.MagicSuffixOnlyKey), baseName, suffix);
+                }
+            }
+
             return Format3(NameStringIds.MagicFormat, prefix, baseName, suffix);
+        }
+
+        private bool MagicAffixExists(int id)
+        {
+            int count = 0;
+            foreach (TxtFile table in new[] { _data.MagicSuffix, _data.MagicPrefix, _data.AutoMagic })
+            {
+                count += table == null ? 0 : table.RowCount;
+            }
+
+            return id > 0 && id <= count;
+        }
+
+        /// <summary>
+        /// The name text of a key cell. D2R resolves these after load with its own miss ids
+        /// (strMissingString for affix and low-quality names, 5383 for unique and set `index`)
+        /// where 1.14d's converter gives 5382.
+        /// </summary>
+        private string NameText(TxtFile table, int row, string column, int resurrectedMiss)
+        {
+            if (!_resurrected)
+            {
+                return TxtKeys.Text(table, row, column, _data.Strings);
+            }
+
+            if (!table.HasColumn(column))
+            {
+                return Str(0);
+            }
+
+            int id = _data.Strings.GetIndexByKey(table.GetString(row, column));
+            return Str(id >= 0 ? id : resurrectedMiss);
         }
 
         // 0x48c5c1. Rare, crafted and tempered are byte-for-byte identical arms. The base name is
@@ -356,7 +527,7 @@ namespace D2ItemToolkit
             string affixes;
             TryPersonalizePart(item, Format2(NameStringIds.RareFormat, first, second), out affixes);
 
-            return baseName + Str(DescStringIds.Newline) + affixes;
+            return Strip(baseName) + Str(DescStringIds.Newline) + affixes;
         }
 
         // 0x48ca1c. Base name, newline, then the set item's own name wrapped in format 10089.
@@ -368,11 +539,13 @@ namespace D2ItemToolkit
                 return null;
             }
 
-            string setName = TxtKeys.Text(table, item.FileIndex, "index", _data.Strings);
+            string setName = NameText(table, item.FileIndex, "index", NameStringIds.MissingIndexName);
             if (string.IsNullOrEmpty(setName))
             {
-                return null;
+                return _resurrected ? Strip(baseName) + Str(DescStringIds.Newline) : null;
             }
+
+            baseName = Strip(baseName);
 
             // 0x48cae3: when INV_FormatPlayerNameWithBase succeeds its text REPLACES the 10089
             // wrapper rather than being wrapped by it.
@@ -388,13 +561,16 @@ namespace D2ItemToolkit
         private string Unique(ItemIdentity item, string baseName)
         {
             TxtFile table = _data.UniqueItems;
+            baseName = Strip(baseName);
             if (table == null || item.FileIndex < 0 || item.FileIndex >= table.RowCount)
             {
                 return baseName;
             }
 
-            string uniqueName = TxtKeys.Text(table, item.FileIndex, "index", _data.Strings);
-            if (string.IsNullOrEmpty(uniqueName))
+            // D2R has no empty-name fallback to the base (0x140158383).
+            string uniqueName = Strip(
+                NameText(table, item.FileIndex, "index", NameStringIds.MissingIndexName));
+            if (!_resurrected && string.IsNullOrEmpty(uniqueName))
             {
                 return baseName;
             }
@@ -443,7 +619,7 @@ namespace D2ItemToolkit
 
                 if (at < table.RowCount)
                 {
-                    return TxtKeys.Text(table, at, "Name", _data.Strings) ?? string.Empty;
+                    return NameText(table, at, "Name", NameStringIds.MissingString) ?? string.Empty;
                 }
 
                 at -= table.RowCount;
@@ -471,7 +647,7 @@ namespace D2ItemToolkit
 
                 if (at < table.RowCount)
                 {
-                    return TxtKeys.Text(table, at, "name", _data.Strings) ?? string.Empty;
+                    return NameText(table, at, "name", NameStringIds.MissingString) ?? string.Empty;
                 }
 
                 at -= table.RowCount;
@@ -487,17 +663,144 @@ namespace D2ItemToolkit
 
         private string Format1(int formatId, string a)
         {
-            return Positional(Str(formatId), a, null, null);
+            return _resurrected
+                ? ResurrectedFormat(Str(formatId), a)
+                : Positional(Str(formatId), a, null, null);
         }
 
         private string Format2(int formatId, string a, string b)
         {
-            return Positional(Str(formatId), a, b, null);
+            return _resurrected
+                ? ResurrectedFormat(Str(formatId), a, b)
+                : Positional(Str(formatId), a, b, null);
         }
 
         private string Format3(int formatId, string a, string b, string c)
         {
-            return Positional(Str(formatId), a, b, c);
+            return _resurrected
+                ? ResurrectedFormat(Str(formatId), a, b, c)
+                : Positional(Str(formatId), a, b, c);
+        }
+
+        /// <summary>
+        /// sub_140251970, the name formatter with its grammar header. A format "a0n1:%0 %1" names
+        /// an ADJECTIVE argument (the digit after the first 'a' before the colon) and a NOUN (after
+        /// the first 'n'): the noun's leading 4-character tag ("[fs]", default "[ms]") is dropped
+        /// and selects the adjective's variant — the text after that tag up to the next '['. An
+        /// adjective without the tag, or not opening with '[', is used whole, tags and all, which
+        /// is how the game prints "de la ballena [fs]Corona". Then argument i replaces the FIRST
+        /// %i, and a space straight after the marker is dropped when the text so far ends in one.
+        ///
+        /// The game works on UTF-8 bytes; every byte this inspects ('[', ']', ':', '%', space and
+        /// the tag letters) is ASCII on the item path, so chars give the same result. The 399/1023
+        /// byte caps are beyond any name. For an empty argument substituted at position 0 the game
+        /// tests a stack byte it never wrote (rsp+0x2F); only a magic item with no affix reaches
+        /// that, and it is taken as "not a space".
+        /// </summary>
+        private static string ResurrectedFormat(string format, params string[] args)
+        {
+            if (format == null)
+            {
+                return string.Empty;
+            }
+
+            // The argument list ends at the first null; an empty string still counts.
+            int count = 0;
+            while (count < args.Length && args[count] != null)
+            {
+                ++count;
+            }
+
+            var slots = new string[Math.Max(count, 10)];
+            for (int i = 0; i < slots.Length; ++i)
+            {
+                slots[i] = i < count ? args[i] : string.Empty;
+            }
+
+            string text = format;
+            int colon = format.IndexOf(':');
+            if (colon >= 0)
+            {
+                int adjective = HeaderIndex(format, 'a', colon);
+                int noun = HeaderIndex(format, 'n', colon);
+
+                if (adjective < 0)
+                {
+                    // 0x140251cb3: a noun alone loses its first four characters unconditionally.
+                    if (noun >= 0 && noun < slots.Length)
+                    {
+                        slots[noun] = slots[noun].Length > 4 ? slots[noun].Substring(4) : string.Empty;
+                    }
+                }
+                else if (adjective < slots.Length)
+                {
+                    string tag = DefaultGenderTag;
+                    bool search = true;
+
+                    if (noun >= 0 && noun < slots.Length)
+                    {
+                        // 0x140251b0f: only a noun opening with '[' carries a tag.
+                        if (slots[noun].StartsWith("[", StringComparison.Ordinal))
+                        {
+                            tag = slots[noun].Substring(0, Math.Min(4, slots[noun].Length));
+                            slots[noun] = slots[noun].Length > 4 ? slots[noun].Substring(4) : string.Empty;
+                        }
+
+                        // 0x140251be3: with a noun, the adjective must open with '[' to be split.
+                        search = slots[adjective].StartsWith("[", StringComparison.Ordinal);
+                    }
+
+                    int at = search ? slots[adjective].IndexOf(tag, StringComparison.Ordinal) : -1;
+                    if (at >= 0)
+                    {
+                        int start = at + 4;
+                        int end = slots[adjective].IndexOf('[', start);
+                        slots[adjective] = end < 0
+                            ? slots[adjective].Substring(start)
+                            : slots[adjective].Substring(start, end - start);
+                    }
+                }
+
+                text = format.Substring(colon + 1);
+            }
+
+            for (int i = 0; i < count; ++i)
+            {
+                string marker = "%" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                int at = text.IndexOf(marker, StringComparison.Ordinal);
+                if (at < 0)
+                {
+                    continue;
+                }
+
+                string head = text.Substring(0, at) + slots[i];
+                string tail = text.Substring(at + marker.Length);
+                if (head.Length != 0 && head[head.Length - 1] == ' '
+                    && tail.StartsWith(" ", StringComparison.Ordinal))
+                {
+                    tail = tail.Substring(1);
+                }
+
+                text = head + tail;
+            }
+
+            return text;
+        }
+
+        // dword_14163c950: the tag a noun without one is taken to have.
+        private const string DefaultGenderTag = "[ms]";
+
+        // The digit after the first `letter` of the WHOLE format, if that letter sits before the
+        // colon (0x140251a9b / 0x140251ac3); -1 otherwise.
+        private static int HeaderIndex(string format, char letter, int colon)
+        {
+            int at = format.IndexOf(letter);
+            if (at < 0 || at >= colon || at + 1 >= format.Length)
+            {
+                return -1;
+            }
+
+            return format[at + 1] - '0';
         }
 
         // The engine's POSITIONAL formatter: %0, %1, %2 select arguments. A missing argument leaves

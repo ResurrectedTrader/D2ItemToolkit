@@ -5,8 +5,10 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## What this is
 
 A reimplementation of Diablo II 1.14d's item description engine, reconstructed from the
-disassembly. A C++ producer captures a unit's stat lists as JSON; a C# consumer renders the exact
-tooltip the game would draw. See `README.md` for the split and `docs/writers.md` for the spec.
+disassembly — and, as a second variant, Diablo II: Resurrected's (base tables and Reign of the
+Warlock). A C++ producer captures a unit's stat lists as JSON; a C# consumer renders the exact
+tooltip the game would draw. See `README.md` for the split, `docs/writers.md` for the 1.14d spec and
+`docs/resurrected.md` for the D2R deltas.
 
 Correctness here means **byte-identical to the original**, including its oddities. This is not a
 reimplementation "in the spirit of" the game.
@@ -44,11 +46,28 @@ Concretely, in this binary:
 Every `0x...` is an offset into the **merged single-binary 1.14d build** — one `0x400000`-based
 `.text`. They are **not** 1.10f DLL-relative. D2MOO annotates the same offsets as `1.14d: Game.0x...`.
 
+The exception is D2R code and `docs/resurrected.md`: `0x14...` addresses are in **d2r.exe** (x64,
+`0x140000000`-based), the Reign of the Warlock build the D2R data was extracted from. There is no
+1.14d database, so 1.14d behaviour is what the code and `docs/writers.md` already record.
+
+### Variants
+
+`GameVariant` selects the tables; `D2DataFiles.IsResurrected` is the only switch the engine reads.
+A D2R delta is a branch on it next to the 1.14d code, citing the d2r.exe address — never a change to
+the 1.14d path. Both D2R variants run the same code; only the tables differ.
+
 ### Game data
 
 Comes from an MPQ extraction of the **1.14d** MPQs. Never a CASC extraction (those are D2R-era) and
 never a re-exported or modded tree. The embedded copies under `data/` are byte-identical to that
 extraction, and `tools/DataSmoke` takes an extraction path so you can check they have not drifted.
+
+D2R data under `data/d2r/` comes from a CASC extraction of D2R (`data/data/global/excel`,
+`excel/base`, `local/lng/strings`, `strings-legacy`, `global/animdata.d2`). `excel/base/` embeds only
+the tables that differ from `excel/`. `dotnet run --project tools/DataSmoke -c Release -- d2r
+<extraction>/data/data` byte-compares every embedded D2R file and checks row counts and
+ItemStatCost string ids against the game's own compiled `.bin` tables — run it after touching
+`data/d2r/`.
 
 `STRUCT_CreateBinFieldExcelAndFillData` (real entry `0x6bd640`) deletes any row whose first cell is
 exactly `Expansion`. Most `.bin` files therefore hold one fewer record than the `.txt`, and **every
@@ -111,13 +130,20 @@ larger corpus.
 
 ```bash
 # C#
-dotnet test                                  # 1041 tests
+dotnet test                                  # 1263 tests
 dotnet run --project tools/RecordSmoke
-dotnet run --project tools/DataSmoke         # optional: -- <excelDir> <localeDir>
+dotnet run --project tools/DataSmoke         # optional: -- <excelDir> <localeDir>, or -- d2r <root>
+
+# The D2R differential: one corpus per table set (a trailing variant argument, nothing else
+# after `--`), then `d2r-suite` renders both with every layer plus the RotW corpus in all 13
+# locales, HD and legacy, into tests/corpus/locales/.
+dotnet run --project tools/Corpus -c Release -- tests/corpus/d2r-rotw-corpus.json ReignOfTheWarlock
+dotnet run --project tools/Corpus -c Release -- tests/corpus/d2r-base-corpus.json Resurrected
+dotnet run --project tools/Reference -c Release -- d2r-suite tests/corpus/d2r-rotw-corpus.json tests/corpus/d2r-base-corpus.json tests/corpus
 
 # TypeScript (npm workspaces, rooted at the repository)
 npm ci                                       # also generates the embedded data blob
-npm test                                     # 1057 tests, including the differential
+npm test                                     # 1311 tests, including both differentials
 npm run test:adversarial                     # 11,972 producer-legal hostile cases, opt-in
 npm run typecheck
 npm run lint                                 # ESLint, type-aware; --max-warnings 0
@@ -130,7 +156,7 @@ dotnet jb inspectcode D2ItemToolkit.sln --output=obj/inspect.sarif --format=Sari
 
 `npm ci` runs the package's `prepare`, which regenerates `src/D2ItemToolkit.Ts/src/Data/
 EmbeddedDataBlob.ts` from `data/` — a gzipped container of all 37 files (33 excel, 3 locale, 1
-global), **generated and
+global) — and `EmbeddedResurrectedDataBlob.ts` from `data/d2r/` (93 files), both **generated and
 gitignored**, so the package works from a published install and in a browser. `fflate` is the one
 runtime dependency; its inflate is synchronous, which is what lets `D2DataFiles.load()` keep the
 signature the whole suite already uses. Regenerate with `npm run generate:data` after touching

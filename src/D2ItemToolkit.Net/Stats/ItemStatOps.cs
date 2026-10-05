@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace D2ItemToolkit
@@ -15,6 +16,27 @@ namespace D2ItemToolkit
         {
             PercentStat = percentStat;
             TargetStat = targetStat;
+        }
+    }
+
+    /// <summary>One op-4 or op-5 relationship: a per-level stat that scales a target by a unit stat.</summary>
+    internal struct ItemStatLevelOpEntry
+    {
+        public readonly int SourceStat;
+        public readonly int TargetStat;
+        public readonly int Op;
+        public readonly int OpParam;
+        public readonly int OpBase;
+        public readonly int OpBaseShift;
+
+        public ItemStatLevelOpEntry(int sourceStat, int targetStat, int op, int opParam, int opBase, int opBaseShift)
+        {
+            SourceStat = sourceStat;
+            TargetStat = targetStat;
+            Op = op;
+            OpParam = opParam;
+            OpBase = opBase;
+            OpBaseShift = opBaseShift;
         }
     }
 
@@ -157,6 +179,81 @@ namespace D2ItemToolkit
             {
                 merged.Remove(key);
             }
+        }
+
+        /// <summary>
+        /// D2R's ops 4 and 5, which fire once the item's list is attached to a player or monster:
+        /// ITEMDESC_Defense (0x1401d1df1) and ITEMDESC_GetMinMaxStats (0x1401d08a2) attach it to the
+        /// viewer before reading the total, and STATLIST_PostStatToStatList re-runs every op-4/5 stat
+        /// against that unit (0x14020e0f0 / 0x14020e1c5). Per entry, the evaluator 0x14020bff0 takes
+        /// `level = stat(unit, opbase) &gt;&gt; valshift(opbase)` and skips at &lt;= 0, takes the
+        /// source's combined value on the item and skips at 0, then adds
+        /// `(source * level) &gt;&gt; opparam` (op 4, 0x14020c34e) or that as a percent of the target's
+        /// pre-op value (op 5, 0x14020c690 onward). <paramref name="preOp"/> is the merged view before
+        /// op 13; the base view is left alone, so the colour marker still sees base != total.
+        /// </summary>
+        public static void ResolveLevelScaled(
+            IDictionary<int, int> merged,
+            IDictionary<int, int> preOp,
+            IReadOnlyList<ItemStatLevelOpEntry> entries,
+            Func<int, int> unitStat)
+        {
+            if (merged == null || preOp == null || entries == null || unitStat == null)
+            {
+                return;
+            }
+
+            foreach (ItemStatLevelOpEntry entry in entries)
+            {
+                int level = unitStat(entry.OpBase) >> entry.OpBaseShift;
+                if (level <= 0)
+                {
+                    continue;
+                }
+
+                int source;
+                if (!preOp.TryGetValue(ItemStatReader.PackStatKey(0, entry.SourceStat), out source) || source == 0)
+                {
+                    continue;
+                }
+
+                int scaled = unchecked(source * level) >> entry.OpParam;
+                int key = ItemStatReader.PackStatKey(0, entry.TargetStat);
+
+                int added;
+                if (entry.Op == 4)
+                {
+                    added = scaled;
+                }
+                else
+                {
+                    int target;
+                    preOp.TryGetValue(key, out target);
+                    added = ApplyPercentOverflowSafe(target, scaled);
+                }
+
+                int existing;
+                merged[key] = unchecked((merged.TryGetValue(key, out existing) ? existing : 0) + added);
+            }
+        }
+
+        /// <summary>
+        /// D2R's overflow-safe percent (the stat-209 tail at 0x140228a0c and op 5 at 0x14020c697 use
+        /// the same three forms).
+        /// </summary>
+        internal static int ApplyPercentOverflowSafe(int value, int percent)
+        {
+            if (value > 0x100000)
+            {
+                return (value & ~0xF) < 0x640 ? (int)((long)value * percent / 100) : (value / 100) * percent;
+            }
+
+            if (percent > 0x10000)
+            {
+                return (percent & ~0xF) < 0x640 ? (int)((long)value * percent / 100) : (percent / 100) * value;
+            }
+
+            return value * percent / 100;
         }
 
         /// <summary>

@@ -51,6 +51,12 @@ namespace D2ItemToolkit.DataSmoke
             //   DataSmoke <excelDir> <localeDir>
             // With no arguments it uses the embedded tables, so it runs anywhere — including CI,
             // where there is no extraction to read.
+            // D2R: DataSmoke d2r <extraction>/data/data — drift and .bin cross-checks.
+            if (args.Length == 2 && args[0] == "d2r")
+            {
+                return ResurrectedSmoke.Run(args[1]);
+            }
+
             D2DataFiles data;
             if (args.Length > 0)
             {

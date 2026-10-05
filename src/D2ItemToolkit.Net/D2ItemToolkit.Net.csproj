@@ -18,7 +18,7 @@
       1.0.0 and is only ever for inspecting the package.
     -->
     <Authors>ResurrectedTrader</Authors>
-    <Description>Diablo II 1.14d's item description engine, reimplemented from the disassembly. Give it a captured unit and it renders the exact tooltip the game would draw, byte for byte, including the game's own quirks. The shipped tables are embedded, so it works with no game install.</Description>
+    <Description>Diablo II's item description engine for 1.14d and Diablo II: Resurrected (including Reign of the Warlock), reimplemented from the disassembly. Give it a captured unit and it renders the exact tooltip the game would draw, byte for byte, including the game's own quirks. The shipped tables are embedded, so it works with no game install.</Description>
     <PackageTags>diablo2;diablo-ii;d2;tooltip;item;reverse-engineering;game;modding</PackageTags>
     <!--
       The FILE, not the `MIT` expression. An expression makes nuget.org display "MIT" for the whole
@@ -85,6 +85,22 @@
     </EmbeddedResource>
     <EmbeddedResource Include="..\..\data\global\*.D2" Visible="false">
       <LogicalName>D2ItemToolkit.Data.global.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <!-- Diablo II: Resurrected. base/ holds only the tables that differ from excel/. -->
+    <EmbeddedResource Include="..\..\data\d2r\excel\*.txt" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.d2r.excel.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\d2r\excel\base\*.txt" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.d2r.excel.base.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\d2r\strings\*.json" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.d2r.strings.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\d2r\strings-legacy\*.json" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.d2r.strings-legacy.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\data\d2r\global\*.d2" Visible="false">
+      <LogicalName>D2ItemToolkit.Data.d2r.global.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 

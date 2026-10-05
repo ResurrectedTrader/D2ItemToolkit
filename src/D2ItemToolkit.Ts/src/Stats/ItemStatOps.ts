@@ -19,7 +19,72 @@ import { Int32, type IItemStatOpTable } from '../Types.js';
  * which is what GetStatUnsignedValue reads. So the pass is not self-referential: it consumes
  * the base view and produces the merged one.
  */
+/** One op-4 or op-5 relationship: a per-level stat that scales a target by a unit stat. */
+export interface ItemStatLevelOpEntry {
+  readonly sourceStat: number;
+  readonly targetStat: number;
+  readonly op: number;
+  readonly opParam: number;
+  readonly opBase: number;
+  readonly opBaseShift: number;
+}
+
 export class ItemStatOps {
+  /**
+   * D2R's ops 4 and 5, which fire once the item's list is attached to a player or monster:
+   * ITEMDESC_Defense (0x1401d1df1) and ITEMDESC_GetMinMaxStats (0x1401d08a2) attach it to the viewer
+   * before reading the total, and STATLIST_PostStatToStatList re-runs every op-4/5 stat against that
+   * unit (0x14020e0f0 / 0x14020e1c5). Per entry, the evaluator 0x14020bff0 takes
+   * `level = stat(unit, opbase) >> valshift(opbase)` and skips at <= 0, takes the source's combined
+   * value on the item and skips at 0, then adds `(source * level) >> opparam` (op 4, 0x14020c34e)
+   * or that as a percent of the target's pre-op value (op 5, 0x14020c690 onward). `preOp` is the
+   * merged view before op 13; the base view is left alone, so the colour marker still sees
+   * base != total.
+   */
+  static resolveLevelScaled(
+    merged: Map<number, number>,
+    preOp: ReadonlyMap<number, number>,
+    entries: readonly ItemStatLevelOpEntry[],
+    unitStat: (statId: number) => number,
+  ): void {
+    for (const entry of entries) {
+      const level = unitStat(entry.opBase) >> entry.opBaseShift;
+      if (level <= 0) {
+        continue;
+      }
+
+      const source = preOp.get(ItemStatReader.packStatKey(0, entry.sourceStat)) ?? 0;
+      if (source === 0) {
+        continue;
+      }
+
+      const scaled = Math.imul(source, level) >> entry.opParam;
+      const key = ItemStatReader.packStatKey(0, entry.targetStat);
+      const added =
+        entry.op === 4 ? scaled : ItemStatOps.applyPercentOverflowSafe(preOp.get(key) ?? 0, scaled);
+
+      merged.set(key, ((merged.get(key) ?? 0) + added) | 0);
+    }
+  }
+
+  /**
+   * D2R's overflow-safe percent (the stat-209 tail at 0x140228a0c and op 5 at 0x14020c697 use the
+   * same three forms).
+   */
+  static applyPercentOverflowSafe(value: number, percent: number): number {
+    const wide = (): number => Number(BigInt.asIntN(32, (BigInt(value) * BigInt(percent)) / 100n));
+
+    if (value > 0x100000) {
+      return (value & ~0xf) < 0x640 ? wide() : Math.imul(Math.trunc(value / 100), percent);
+    }
+
+    if (percent > 0x10000) {
+      return (percent & ~0xf) < 0x640 ? wide() : Math.imul(Math.trunc(percent / 100), value);
+    }
+
+    return Math.trunc(Math.imul(value, percent) / 100);
+  }
+
   /**
    * Applies every op-13 entry to `merged` in place. Only the Equipped and ForSale views may be
    * passed here.

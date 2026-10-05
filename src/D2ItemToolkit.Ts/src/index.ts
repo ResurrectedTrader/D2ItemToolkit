@@ -47,9 +47,15 @@ export {
 // What `TooltipEngine.ranges` gives back. `isPackedStat` is exported so a caller deciding which
 // stats may be summed reads that rule from here rather than deriving its own.
 export {
+  ChoicePickMode,
+  ChoiceResolution,
   RollSources,
   isPackedStat,
   type ItemRollRanges,
+  type RolledChoice,
+  type RolledChoiceOption,
+  type RolledChoicePick,
+  type RolledChoiceVariant,
   type RolledLayerRange,
   type RolledStatRange,
 } from './Stats/RolledRangeReconstructor.js';
@@ -75,6 +81,9 @@ export type { ItemDamage, ItemDamageRange } from './Tooltip/ItemDamage.js';
 // add an entry point to one, add it to the other.
 export { TxtFile } from './Data/TxtFile.js';
 export { TblFile, TblStringTable } from './Data/TblFile.js';
+export { GameVariant, type ResurrectedTextOptions } from './Data/GameVariant.js';
+export { StringTable } from './Data/StringTable.js';
+export { JsonStringTable } from './Data/JsonStringTable.js';
 export { AnimDataFile } from './Data/AnimDataFile.js';
 export { D2DataFiles } from './Tables/TxtDataProviders.js';
 export { ItemTable, ItemTier } from './Tables/ItemTable.js';

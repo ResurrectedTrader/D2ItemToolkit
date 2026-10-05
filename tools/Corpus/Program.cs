@@ -15,22 +15,30 @@ namespace D2ItemToolkit.Tools
     /// </summary>
     public static class Program
     {
-        private static readonly D2DataFiles Data = D2DataFiles.LoadEmbedded();
-
-        private static readonly ItemTable Items = new ItemTable(
-            Data.Weapons, Data.Armor, Data.Misc);
-
-        private static readonly MagicAffixTable Affixes = new MagicAffixTable(Data);
+        // Set once in Main from the optional variant argument.
+        private static D2DataFiles Data;
+        private static ItemTable Items;
+        private static MagicAffixTable Affixes;
 
         public static int Main(string[] args)
         {
-            if (args.Length < 1)
+            GameVariant variant = GameVariant.Lod114d;
+            if (args.Length < 1 || (args.Length > 1 && !Enum.TryParse(args[1], out variant)))
             {
-                Console.Error.WriteLine("usage: Corpus <out.json>");
+                Console.Error.WriteLine("usage: Corpus <out.json> [Lod114d|Resurrected|ReignOfTheWarlock]");
                 return 2;
             }
 
+            Data = D2DataFiles.LoadEmbedded(variant);
+            Items = new ItemTable(Data.Weapons, Data.Armor, Data.Misc);
+            Affixes = new MagicAffixTable(Data);
+
             var cases = new List<string>();
+
+            if (Data.IsResurrected)
+            {
+                AddResurrectedCases(cases);
+            }
 
             AddQualitySweep(cases);
             AddSocketCases(cases);
@@ -722,6 +730,19 @@ namespace D2ItemToolkit.Tools
                 cases.Add(Case(
                     "layerroll-" + index.Replace("'", string.Empty).Replace(" ", string.Empty),
                     UniqueRecord(classId, row, -1),
+                    null));
+
+                // The same item WITH its rolled stat, so the LayerVaries entry has to explain it:
+                // a skill inside 36..60 for the robes, a class inside 0..6 for the torch.
+                string rolled = index == "Ormus' Robes"
+                    ? "{ \"id\": 107, \"layer\": 54, \"value\": 3 }"
+                    : "{ \"id\": 83, \"layer\": 4, \"value\": 3 }";
+                string record = UniqueRecord(classId, row, -1);
+                record = record.Substring(0, record.Length - 4)
+                    + ", { \"stateNo\": 0, \"flags\": 64, \"stats\": [ " + rolled + " ] } ] }";
+                cases.Add(Case(
+                    "layerroll-recorded-" + index.Replace("'", string.Empty).Replace(" ", string.Empty),
+                    record,
                     null));
             }
 
@@ -1459,8 +1480,558 @@ namespace D2ItemToolkit.Tools
                     + ", " + CarriedPiece(Wings, "amu", 1, 5))));
         }
 
+        /// <summary>
+        /// The branches only D2R has: the Warlock class in every class-indexed table, the belt,
+        /// rune and event-item lines, the "of" quantity, data-driven potions, the new descfuncs and
+        /// the one-affix magic names.
+        /// </summary>
+        private static void AddResurrectedCases(List<string> cases)
+        {
+            const int Warlock = 7;
+
+            foreach (string code in new[] { "wa1", "wa5", "waf", "lbl", "vbl", "ulc", "zlb", "r01", "r33",
+                                            "pk1", "ua1", "aqv", "cqv", "tkf", "hp5", "mp5", "rvs", "rvl",
+                                            "box", "bkd", "xa1", "jav", "7gd", "lrg" })
+            {
+                int classId = Items.ClassIdForCode(code);
+                if (classId < 0)
+                {
+                    continue;
+                }
+
+                string record = Record(classId, 2, 16,
+                    "{ \"id\": 31, \"value\": 40 }, { \"id\": 72, \"value\": 20 }, "
+                    + "{ \"id\": 73, \"value\": 30 }, { \"id\": 70, \"value\": 60 }, "
+                    + "{ \"id\": 21, \"value\": 5 }, { \"id\": 22, \"value\": 12 }, "
+                    + "{ \"id\": 159, \"value\": 5 }, { \"id\": 160, \"value\": 12 }",
+                    "{ \"id\": 254, \"value\": 20 }, { \"id\": 160, \"value\": 4 }");
+
+                foreach (int viewerClass in new[] { 1, 3, 4, Warlock })
+                {
+                    cases.Add(Case("d2r-" + code + "-c" + viewerClass, record, Player(viewerClass, 50)));
+                }
+            }
+
+            int shard = Items.ClassIdForCode("xa1");
+            if (shard >= 0)
+            {
+                string record = Record(shard, 2, 16, string.Empty, string.Empty);
+                cases.Add(Case("d2r-xa1-hell-zones", record, Player(0, 80), difficulty: 2, desecrated: true));
+                cases.Add(Case("d2r-xa1-hell", record, Player(0, 80), difficulty: 2));
+            }
+
+            // spelldescstr resolves through the HD table even under legacy text; the legacy table
+            // holds none of these ids, so the legacy references pin the missing-string line.
+            foreach (string code in new[] { "xa1", "xa2", "xa3", "xa4", "xa5" })
+            {
+                int id = Items.ClassIdForCode(code);
+                if (id >= 0)
+                {
+                    cases.Add(Case("d2r-" + code + "-spelldesc", Record(id, 2, 16, string.Empty, string.Empty), Player(0, 60)));
+                }
+            }
+
+            // The new and changed descfuncs, each on its own ring so a divergence names the stat.
+            int ring = Items.ClassIdForCode("rin");
+            int levitate = Data.SkillRows.FindRow("skill", "Levitate");
+            int battleOrders = Data.SkillRows.FindRow("skill", "Battle Orders");
+            string[] modifiers =
+            {
+                "{ \"id\": 36, \"value\": 10 }",
+                "{ \"id\": 36, \"value\": -15 }",
+                "{ \"id\": 97, \"layer\": " + battleOrders + ", \"value\": 6 }",
+                "{ \"id\": 107, \"layer\": " + levitate + ", \"value\": 2 }",
+                "{ \"id\": 83, \"layer\": 7, \"value\": 1 }",
+                "{ \"id\": 188, \"layer\": 57, \"value\": 2 }",
+                "{ \"id\": 112, \"value\": 64 }",
+                "{ \"id\": 214, \"value\": 8 }",
+                "{ \"id\": 48, \"value\": 5 }, { \"id\": 49, \"value\": 10 }",
+                "{ \"id\": 48, \"value\": 7 }, { \"id\": 49, \"value\": 7 }",
+                "{ \"id\": 57, \"value\": 256 }, { \"id\": 58, \"value\": 512 }, { \"id\": 59, \"value\": 75 }",
+                "{ \"id\": 17, \"value\": 40 }, { \"id\": 18, \"value\": 40 }",
+                "{ \"id\": 0, \"value\": 5 }, { \"id\": 1, \"value\": 5 }, { \"id\": 2, \"value\": 5 }, { \"id\": 3, \"value\": 5 }",
+            };
+
+            for (int at = 0; at < modifiers.Length; ++at)
+            {
+                foreach (int viewerClass in new[] { 4, Warlock })
+                {
+                    cases.Add(Case(
+                        "d2r-mod" + at + "-c" + viewerClass,
+                        Record(ring, 6, 16, string.Empty, modifiers[at]),
+                        Player(viewerClass, 60)));
+                }
+            }
+
+            // Magic names: both affixes, prefix only, suffix only.
+            int shield = Items.ClassIdForCode("lrg");
+            int prefix = Data.MagicSuffix.RowCount + 1 + Data.MagicPrefix.FindRow("Name", "Sturdy");
+            int suffix = 1 + Data.MagicSuffix.FindRow("Name", "of Health");
+            foreach (int[] affixes in new[] { new[] { prefix, suffix }, new[] { prefix, 0 }, new[] { 0, suffix } })
+            {
+                cases.Add(Case(
+                    "d2r-magic-" + affixes[0] + "-" + affixes[1],
+                    "{ \"unitType\": 4, \"classId\": " + shield + ", \"quality\": 4, \"itemFlags\": 16, "
+                    + "\"magicPrefix\": [" + affixes[0] + ", 0, 0], \"magicSuffix\": [" + affixes[1] + ", 0, 0], "
+                    + "\"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, \"stats\": [ "
+                    + "{ \"id\": 31, \"value\": 60 }, { \"id\": 72, \"value\": 30 }, { \"id\": 73, \"value\": 30 } ] } ] }",
+                    Player(3, 40)));
+            }
+
+            // Names that reach the possessive and the rare formatter — what a non-English reference
+            // of this corpus polices (the grammar header and sub_140478a70).
+            int crown = Items.ClassIdForCode("crn");
+            int beast = Data.RareSuffix.RowCount + 1 + Data.RarePrefix.FindRow("name", "Beast");
+            int bite = 1 + Data.RareSuffix.FindRow("name", "bite");
+            foreach (string owner in new[] { "Hans", "Anna", "anna" })
+            {
+                cases.Add(Case(
+                    "d2r-personal-" + owner,
+                    "{ \"unitType\": 4, \"classId\": " + crown + ", \"quality\": 2, \"itemFlags\": 16777232, "
+                    + "\"playerName\": \"" + owner + "\" }",
+                    Player(0, 40)));
+                cases.Add(Case(
+                    "d2r-personal-rare-" + owner,
+                    "{ \"unitType\": 4, \"classId\": " + crown + ", \"quality\": 6, \"itemFlags\": 16777232, "
+                    + "\"playerName\": \"" + owner + "\", \"rarePrefix\": " + beast + ", \"rareSuffix\": " + bite + " }",
+                    Player(0, 40)));
+            }
+
+            foreach (string code in new[] { "crn", "ghm", "scp", "lbt" })
+            {
+                int classId = Items.ClassIdForCode(code);
+                foreach (string[] pair in new[]
+                         {
+                             new[] { "Sturdy", null }, new[] { null, "of the Whale" },
+                             new[] { "Virulent", null }, new[] { "Screaming", "of Thorns" },
+                         })
+                {
+                    int p = pair[0] == null ? 0 : Data.MagicSuffix.RowCount + 1 + Data.MagicPrefix.FindRow("Name", pair[0]);
+                    int s = pair[1] == null ? 0 : 1 + Data.MagicSuffix.FindRow("Name", pair[1]);
+                    cases.Add(Case(
+                        "d2r-name-" + code + "-" + p + "-" + s,
+                        "{ \"unitType\": 4, \"classId\": " + classId + ", \"quality\": 4, \"itemFlags\": 16, "
+                        + "\"magicPrefix\": [" + p + ", 0, 0], \"magicSuffix\": [" + s + ", 0, 0] }",
+                        Player(0, 40)));
+                }
+            }
+
+            // A Levitate Warlock: stat 203 on layer `weap | 1 << 14` cuts a weapon's requirements.
+            int sword = Items.ClassIdForCode("lsd");
+            int weap = Data.ItemTypes.FindRow("Code", "weap");
+            cases.Add(Case(
+                "d2r-mastery-sword",
+                Record(sword, 2, 16, "{ \"id\": 21, \"value\": 3 }, { \"id\": 22, \"value\": 19 }", string.Empty),
+                "{ \"unitType\": 0, \"classId\": 7, \"flagsEx\": 33554432, \"statsLists\": [ { \"stateNo\": 0, "
+                + "\"flags\": 2147483648, \"stats\": [ { \"id\": 12, \"value\": 30 }, { \"id\": 0, \"value\": 45 }, "
+                + "{ \"id\": 2, \"value\": 30 }, { \"id\": 203, \"layer\": " + (weap | (1 << 14)) + ", \"value\": -20 } ] } ] }"));
+
+            AddMasteryCases(cases, weap);
+
+            AddPropertyGroupCases(cases);
+
+            // Ops 4/5 fold the viewer's level into Defense / damage (0x14020c57d / 0x14020c5ef), at
+            // three viewer levels so the scaling is policed.
+            int paleocene = Data.MagicPrefix.FindRow("Name", "Paleocene");
+            int gritty = Data.MagicPrefix.FindRow("Name", "Gritty");
+            foreach (int level in new[] { 1, 40, 99 })
+            {
+                if (paleocene >= 0)
+                {
+                    cases.Add(Case("d2r-ac-per-level-" + level,
+                        AffixRecord(Items.ClassIdForCode("qui"), Data.MagicSuffix.RowCount + paleocene + 1, 40,
+                            "{ \"id\": 214, \"value\": 24 }, { \"id\": 215, \"value\": 12 }")
+                            .Replace("{ \"id\": 21, \"value\": 8 }, { \"id\": 22, \"value\": 15 }",
+                                "{ \"id\": 31, \"value\": 10 }, { \"id\": 72, \"value\": 20 }, { \"id\": 73, \"value\": 20 }"),
+                        Player(0, level)));
+                }
+
+                if (gritty >= 0)
+                {
+                    cases.Add(Case("d2r-dmg-per-level-" + level,
+                        AffixRecord(Items.ClassIdForCode("hax"), Data.MagicSuffix.RowCount + gritty + 1, 40,
+                            "{ \"id\": 218, \"value\": 6 }, { \"id\": 219, \"value\": 10 }")
+                            .Replace("{ \"id\": 21, \"value\": 8 }, { \"id\": 22, \"value\": 15 }",
+                                "{ \"id\": 21, \"value\": 3 }, { \"id\": 22, \"value\": 6 }, { \"id\": 72, \"value\": 28 }, { \"id\": 73, \"value\": 28 }"),
+                        Player(0, level)));
+                }
+            }
+
+            // Records with RotW class ids, so the base table set skips them.
+            if (Data.Variant == GameVariant.ReignOfTheWarlock)
+            {
+                AddRangeHuntCases(cases);
+            }
+
+            // stat 36 both signs: frFR's "%d% %" leaves a conversion open at the NUL, which the
+            // printf drops (0x140b477d5) — the locale references are where that shows.
+            foreach (var resist in new[] { new { Name = "Shaftstop", Value = 30 }, new { Name = "Bone Break", Value = -15 } })
+            {
+                int row = Data.UniqueItems.FindRow("index", resist.Name);
+                if (row < 0)
+                {
+                    continue;
+                }
+
+                string record = Record(Items.ClassIdForCode(Data.UniqueItems.GetString(row, "code").Trim()), 7, 16,
+                    "{ \"id\": 31, \"value\": 1000 }, { \"id\": 72, \"value\": 60 }, { \"id\": 73, \"value\": 60 }",
+                    "{ \"id\": 36, \"value\": " + resist.Value + " }").Replace("\"fileIndex\": 0", "\"fileIndex\": " + row);
+                cases.Add(Case("d2r-damageresist-" + resist.Name.Replace(" ", string.Empty), record, Player(1, 80)));
+            }
+
+            // The set path's shared buffer (UI_DrawSetItemDescBox 0x1401d49ad / 0x1401d49fb /
+            // 0x1401d4da7): Griswold's Redemption holding four max-roll unique Colossal Jewels.
+            int redemption = Data.SetItems.FindRow("index", "Griswolds's Redemption");   // sic, setitems.txt
+            if (redemption >= 0 && Items.ClassIdForCode("cjw") >= 0)
+            {
+                var jewels = new List<string>();
+                string[] colossal =
+                {
+                    "{ \"id\": 57, \"value\": 975 }, { \"id\": 58, \"value\": 975 }, { \"id\": 59, \"value\": 25 }, { \"id\": 79, \"value\": 50 }, { \"id\": 80, \"value\": 35 }, { \"id\": 85, \"value\": 5 }, { \"id\": 326, \"value\": 1 }, { \"id\": 332, \"value\": 10 }, { \"id\": 336, \"value\": 10 }, { \"id\": 201, \"layer\": 4377, \"value\": 1 }",
+                    "{ \"id\": 50, \"value\": 1 }, { \"id\": 51, \"value\": 75 }, { \"id\": 79, \"value\": 50 }, { \"id\": 80, \"value\": 35 }, { \"id\": 85, \"value\": 5 }, { \"id\": 330, \"value\": 10 }, { \"id\": 334, \"value\": 10 }, { \"id\": 201, \"layer\": 15065, \"value\": 1 }",
+                    "{ \"id\": 54, \"value\": 10 }, { \"id\": 55, \"value\": 30 }, { \"id\": 56, \"value\": 125 }, { \"id\": 79, \"value\": 50 }, { \"id\": 80, \"value\": 35 }, { \"id\": 85, \"value\": 5 }, { \"id\": 331, \"value\": 10 }, { \"id\": 335, \"value\": 10 }, { \"id\": 201, \"layer\": 2585, \"value\": 1 }",
+                    "{ \"id\": 48, \"value\": 20 }, { \"id\": 49, \"value\": 60 }, { \"id\": 79, \"value\": 50 }, { \"id\": 80, \"value\": 35 }, { \"id\": 85, \"value\": 5 }, { \"id\": 329, \"value\": 10 }, { \"id\": 333, \"value\": 10 }, { \"id\": 201, \"layer\": 2969, \"value\": 1 }",
+                };
+                for (int i = 0; i < colossal.Length; ++i)
+                {
+                    string jewel = Record(Items.ClassIdForCode("cjw"), 7, 16, string.Empty, colossal[i])
+                        .Replace("\"fileIndex\": 0", "\"fileIndex\": " + (420 + i));
+                    jewels.Add(jewel);
+                }
+
+                string set = Record(Items.ClassIdForCode(Data.SetItems.GetString(redemption, "item").Trim()), 5, 16 | 0x800,
+                    "{ \"id\": 72, \"value\": 250 }",
+                    "{ \"id\": 17, \"value\": 240 }, { \"id\": 18, \"value\": 240 }, { \"id\": 91, \"value\": -20 }, "
+                    + "{ \"id\": 93, \"value\": 40 }, { \"id\": 122, \"value\": 200 }, { \"id\": 194, \"value\": 4 }")
+                    .Replace("\"fileIndex\": 0", "\"fileIndex\": " + redemption);
+                set = set.Substring(0, set.Length - 2) + ", \"items\": [ " + string.Join(", ", jewels) + " ] }";
+                cases.Add(Case("d2r-bytecap-set-colossal-jewels", set,
+                    "{ \"unitType\": 0, \"classId\": 2, \"flagsEx\": 33554432, \"statsLists\": [ { \"stateNo\": 0, "
+                    + "\"flags\": 2147483648, \"stats\": [ { \"id\": 12, \"value\": 90 }, { \"id\": 0, \"value\": 200 }, "
+                    + "{ \"id\": 2, \"value\": 200 } ] } ] }"));
+            }
+
+            // ruRU's `[pl]...\n` prefixes (Corosive, Spiritual): the name splits onto two rows.
+            foreach (string[] plural in new[] { new[] { "Corosive", "clw" }, new[] { "Spiritual", "dr3" } })
+            {
+                int prefixRow = Data.MagicPrefix.FindRow("Name", plural[0]);
+                if (prefixRow >= 0)
+                {
+                    cases.Add(Case("d2r-plural-prefix-" + plural[0],
+                        AffixRecord(Items.ClassIdForCode(plural[1]), Data.MagicSuffix.RowCount + prefixRow + 1, 40),
+                        Player(1, 80)));
+                }
+            }
+
+            // The modifier walk's 1023-byte strlcat plus the 4-byte colour wrap (0x1401e91f6 /
+            // 0x14008c9f0): a max-roll Arm of King Leoric with one +15% IAS jewel is past it in
+            // ruRU, and the locale references are where that shows.
+            int leoric = Data.UniqueItems.FindRow("index", "Arm of King Leoric");
+            if (leoric >= 0)
+            {
+                var probe = new Unit();
+                probe.UnitType = 4;
+                probe.Quality = 7;
+                probe.FileIndex = leoric;
+                probe.ClassId = Items.ClassIdForCode(Data.UniqueItems.GetString(leoric, "code").Trim());
+                probe.ItemFlags = ItemRecordFlags.Identified;
+                probe.ItemLevel = 85;
+
+                var rolled = new List<string>();
+                foreach (RolledStatRange range in TooltipEngine.FromData(Data).Ranges(probe).Stats)
+                {
+                    rolled.Add("{ \"id\": " + range.StatId + ", \"layer\": " + range.Layer
+                               + ", \"value\": " + range.High + " }");
+                }
+
+                string jewel = Record(Items.ClassIdForCode("jew"), 4, 16, string.Empty, "{ \"id\": 93, \"value\": 15 }");
+                string record = Record(probe.ClassId, 7, 16 | 0x800,
+                    "{ \"id\": 21, \"value\": 10 }, { \"id\": 22, \"value\": 22 }, { \"id\": 72, \"value\": 50 }, "
+                    + "{ \"id\": 73, \"value\": 50 }, { \"id\": 194, \"value\": 1 }",
+                    string.Join(", ", rolled)).Replace("\"fileIndex\": 0", "\"fileIndex\": " + leoric);
+                record = record.Substring(0, record.Length - 2) + ", \"items\": [ " + jewel + " ] }";
+                cases.Add(Case("d2r-bytecap-leoric-jewel", record,
+                    "{ \"unitType\": 0, \"classId\": 2, \"flagsEx\": 33554432, \"statsLists\": [ { \"stateNo\": 0, "
+                    + "\"flags\": 2147483648, \"stats\": [ { \"id\": 12, \"value\": 90 }, { \"id\": 0, \"value\": 200 }, "
+                    + "{ \"id\": 2, \"value\": 200 } ] } ] }"));
+            }
+
+            // Every descfunc that formats through a positional wrapper (sub_14060cb00 / cea0 /
+            // de20 / e430): the locale references are where their `%+0 %1` templates show.
+            int teleport = Data.SkillRows.FindRow("skill", "Teleport");
+            int meditation = Data.SkillRows.FindRow("skill", "Meditation");
+            int fireBall = Data.SkillRows.FindRow("skill", "Fire Ball");
+            cases.Add(Case("d2r-positional-ring",
+                Record(Items.ClassIdForCode("rin"), 6, 16, string.Empty,
+                    "{ \"id\": 151, \"layer\": " + meditation + ", \"value\": 12 }, "
+                    + "{ \"id\": 204, \"layer\": " + ((teleport << 6) | 1) + ", \"value\": " + (20 | (20 << 8)) + " }, "
+                    + "{ \"id\": 97, \"layer\": " + teleport + ", \"value\": 1 }, "
+                    + "{ \"id\": 107, \"layer\": " + fireBall + ", \"value\": 3 }, "
+                    + "{ \"id\": 252, \"value\": 10 }"),
+                Player(1, 80)));
+
+            // ITEMDESC_GetMinMaxStats' MAX(min, max) (0x1401d0987) on the two unclamped lines.
+            cases.Add(Case("d2r-damage-throw-min-above-max",
+                Record(Items.ClassIdForCode("tkf"), 2, 16,
+                    "{ \"id\": 21, \"value\": 10 }, { \"id\": 22, \"value\": 11 }, "
+                    + "{ \"id\": 159, \"value\": 12 }, { \"id\": 160, \"value\": 9 }", string.Empty),
+                Player(1, 80)));
+            cases.Add(Case("d2r-damage-barbarian-min-above-max",
+                Record(Items.ClassIdForCode("2hs"), 2, 16,
+                    "{ \"id\": 21, \"value\": 10 }, { \"id\": 22, \"value\": 9 }, "
+                    + "{ \"id\": 23, \"value\": 14 }, { \"id\": 24, \"value\": 20 }", string.Empty),
+                Player(4, 80)));
+
+            // Metamorphosis's procs (skills 371/372, stat 198 layer `skill << 6 | level`): the only
+            // rows with `item proc text`, so the only reach of the func 15 proc arm (0x1401ec332).
+            cases.Add(Case("d2r-proc-metamorphosis",
+                Record(Items.ClassIdForCode("cap"), 2, 16,
+                    "{ \"id\": 72, \"value\": 30 }, { \"id\": 73, \"value\": 30 }",
+                    "{ \"id\": 198, \"layer\": " + ((371 << 6) | 1) + ", \"value\": 100 }, "
+                    + "{ \"id\": 198, \"layer\": " + ((372 << 6) | 1) + ", \"value\": 100 }"),
+                Player(2, 60)));
+
+            // D2R's worn mask has no identified test (0x14022ec4e-0x14022ec75): Sigon's Gage with
+            // the Visor worn unidentified raises tier 0 while the Visor stays red in the piece list.
+            const int sigonsGage = 35;
+            const int sigonsVisor = 36;
+            foreach (bool identified in new[] { false, true })
+            {
+                string gage = "{ \"unitType\": 4, \"classId\": " + Items.ClassIdForCode("hgl")
+                    + ", \"quality\": 5, \"itemFlags\": 16, \"fileIndex\": " + sigonsGage
+                    + ", \"location\": 1, \"x\": 10, \"statsLists\": [ "
+                    + "{ \"stateNo\": 0, \"flags\": 2147483648, \"stats\": [ { \"id\": 31, \"value\": 10 }, "
+                    + "{ \"id\": 72, \"value\": 20 }, { \"id\": 73, \"value\": 20 } ] }, "
+                    + "{ \"stateNo\": 165, \"flags\": 64, \"stats\": [ { \"id\": 93, \"value\": 30 } ] } ] }";
+                string visor = "{ \"unitType\": 4, \"classId\": " + Items.ClassIdForCode("ghm")
+                    + ", \"quality\": 5, \"itemFlags\": " + (identified ? 16 : 0)
+                    + ", \"fileIndex\": " + sigonsVisor + ", \"location\": 1, \"x\": 1 }";
+                cases.Add(Case("d2r-set-worn-visor-" + (identified ? "identified" : "unidentified"),
+                    gage, Player(0, 60, gage + ", " + visor)));
+            }
+        }
+
+        // The mastery terms' branches: the throwing arm keyed off lastUsedSkill (0x14024d380), the
+        // dual-melee condition bits (0x140239c30) and the stat-209 level tail (0x140228913).
+        private static void AddMasteryCases(List<string> cases, int weap)
+        {
+            int levitate = weap | (1 << 14);
+            int whileDual = weap | (2 << 14);
+
+            foreach (string code in new[] { "tkf", "9ja", "sbr" })
+            {
+                string record = Record(Items.ClassIdForCode(code), 2, 16,
+                    "{ \"id\": 72, \"value\": 30 }, { \"id\": 73, \"value\": 30 }", string.Empty);
+
+                foreach (int skill in new[] { -1, 0, 2, 15 })
+                {
+                    cases.Add(Case("d2r-mastery-throw-" + code + "-" + skill, record,
+                        MasteryViewer(7, 203, levitate, -20, skill, 18)));
+                }
+            }
+
+            string saber = Record(Items.ClassIdForCode("sbr"), 2, 16,
+                "{ \"id\": 72, \"value\": 30 }, { \"id\": 73, \"value\": 30 }", string.Empty);
+            var hands = new[]
+            {
+                new { Name = "dual", Layer = levitate, OffHand = "scm", X = 5, Flags = 16 },
+                new { Name = "broken", Layer = levitate, OffHand = "scm", X = 5, Flags = 16 | 0x100 },
+                new { Name = "swap", Layer = levitate, OffHand = "scm", X = 12, Flags = 16 },
+                new { Name = "cond2", Layer = whileDual, OffHand = "scm", X = 5, Flags = 16 },
+                new { Name = "cond2-alone", Layer = whileDual, OffHand = (string)null, X = 5, Flags = 16 },
+                new { Name = "shield", Layer = levitate, OffHand = "lrg", X = 5, Flags = 16 },
+            };
+
+            foreach (var hand in hands)
+            {
+                string carried = Worn("sbr", 4, 16)
+                    + (hand.OffHand == null ? string.Empty : ", " + Worn(hand.OffHand, hand.X, hand.Flags));
+                cases.Add(Case("d2r-mastery-hands-" + hand.Name, saber,
+                    MasteryViewer(4, 203, hand.Layer, -20, -1, 100, carried)));
+            }
+
+            string ring = Record(Items.ClassIdForCode("rin"), 2, 16, string.Empty, "{ \"id\": 92, \"value\": 40 }");
+            cases.Add(Case("d2r-mastery-level-any", ring, MasteryViewer(1, 209, 0, -25)));
+            cases.Add(Case("d2r-mastery-level-weap", ring, MasteryViewer(1, 209, weap, -25)));
+            cases.Add(Case("d2r-mastery-level-zero", ring, MasteryViewer(1, 209, 0, -100)));
+
+            string ber = Record(Items.ClassIdForCode("r30"), 2, 16, string.Empty, string.Empty);
+            string cap = Record(Items.ClassIdForCode("cap"), 2, 16 | 0x800,
+                "{ \"id\": 72, \"value\": 30 }, { \"id\": 73, \"value\": 30 }, { \"id\": 194, \"value\": 1 }",
+                string.Empty);
+            cap = cap.Substring(0, cap.Length - 2) + ", \"items\": [ " + ber + " ] }";
+            cases.Add(Case("d2r-mastery-level-socket", cap, MasteryViewer(1, 209, 0, -50)));
+        }
+
+        // Every shipped PropertyGroups.txt user — 32 uniqueitems cells, 12 magicprefix cells —
+        // recorded resolved, ambiguous, contradicted and bare, so the `choices` the reconstructor
+        // reports (ITEMMODS_AssignProperty 0x14028a490, the group applier sub_14028A190) are
+        // compared layer for layer. A table set that lacks a row simply skips it.
+        private static void AddPropertyGroupCases(List<string> cases)
+        {
+            var uniques = new List<KeyValuePair<string, string>>
+            {
+                new KeyValuePair<string, string>("Wraithstep", "{ \"id\": 188, \"layer\": 56, \"value\": 1 }"),
+                new KeyValuePair<string, string>("Wraithstep", "{ \"id\": 188, \"layer\": 58, \"value\": 1 }"),
+                new KeyValuePair<string, string>("Wraithstep", "{ \"id\": 96, \"value\": 30 }"),
+                new KeyValuePair<string, string>("Opalvein", "{ \"id\": 357, \"value\": 4 }"),
+                new KeyValuePair<string, string>("Opalvein", "{ \"id\": 17, \"value\": 33 }, { \"id\": 18, \"value\": 33 }"),
+                new KeyValuePair<string, string>("Opalvein", "{ \"id\": 332, \"value\": 4 }"),
+                new KeyValuePair<string, string>("Opalvein", "{ \"id\": 329, \"value\": 4 }, { \"id\": 331, \"value\": 4 }"),
+                new KeyValuePair<string, string>("Opalvein",
+                    "{ \"id\": 195, \"layer\": " + ((398 << 6) | 15) + ", \"value\": 2 }"),
+                new KeyValuePair<string, string>("Crafted Cold Rupture",
+                    "{ \"id\": 187, \"value\": 300 }, { \"id\": 43, \"value\": -70 }, { \"id\": 335, \"value\": 7 }, "
+                    + "{ \"id\": 9, \"value\": 10240 }, { \"id\": 80, \"value\": 20 }, { \"id\": 99, \"value\": 18 }, "
+                    + "{ \"id\": 34, \"value\": 6 }"),
+            };
+
+            foreach (string charm in new[]
+                     {
+                         "Crafted Flame Rift", "Crafted Crack of the Heavens", "Crafted Rotting Fissure",
+                         "Crafted Bone Break", "Crafted Black Cleft",
+                     })
+            {
+                uniques.Add(new KeyValuePair<string, string>(charm, string.Empty));
+            }
+
+            int n = 0;
+            foreach (KeyValuePair<string, string> entry in uniques)
+            {
+                int row = Data.UniqueItems.FindRow("index", entry.Key);
+                if (row < 0)
+                {
+                    continue;
+                }
+
+                int classId = Items.ClassIdForCode(Data.UniqueItems.GetString(row, "code").Trim());
+                string record = Record(classId, 7, 16, "{ \"id\": 31, \"value\": 10 }", entry.Value);
+                record = record.Replace("\"fileIndex\": 0", "\"fileIndex\": " + row);
+                cases.Add(Case("d2r-group-" + entry.Key.Replace(" ", string.Empty) + "-" + n++, record, Player(1, 80)));
+            }
+
+            // The six group prefixes are the magicprefix rows whose mod2 names an `-Affix1` group
+            // (ids 1501..1506 in RotW); earlier rows reuse the same names without one.
+            var prefixes = new[]
+            {
+                new { Name = "Virulent", Code = "cm2", Mods = "{ \"id\": 336, \"value\": 12 }, { \"id\": 79, \"value\": 30 }" },
+                new { Name = "Virulent", Code = "cm2", Mods = "{ \"id\": 336, \"value\": 7 }" },
+                new { Name = "Virulent", Code = "cm2", Mods = "{ \"id\": 336, \"value\": 20 }" },
+                new { Name = "Incendiary", Code = "cm2", Mods = "{ \"id\": 333, \"value\": 3 }, { \"id\": 331, \"value\": 11 }" },
+                new { Name = "Gelid", Code = "qui", Mods = "{ \"id\": 335, \"value\": 3 }, { \"id\": 330, \"value\": 11 }" },
+                new { Name = "Magnetic", Code = "qui", Mods = "{ \"id\": 334, \"value\": 3 }, { \"id\": 329, \"value\": 11 }" },
+                new { Name = "Mystical", Code = "qui", Mods = "{ \"id\": 358, \"value\": 3 }, { \"id\": 17, \"value\": 80 }, { \"id\": 18, \"value\": 80 }" },
+                new { Name = "Breaching", Code = "qui", Mods = "{ \"id\": 366, \"value\": 3 }, { \"id\": 357, \"value\": 11 }" },
+            };
+
+            foreach (var prefix in prefixes)
+            {
+                int row = -1;
+                for (int i = 0; i < Data.MagicPrefix.RowCount && row < 0; ++i)
+                {
+                    if (Data.MagicPrefix.GetString(i, "Name") == prefix.Name
+                        && Data.MagicPrefix.GetString(i, "mod2code").EndsWith("-Affix1", StringComparison.Ordinal))
+                    {
+                        row = i;
+                    }
+                }
+
+                int classId = Items.ClassIdForCode(prefix.Code);
+                if (row < 0 || classId < 0)
+                {
+                    continue;
+                }
+
+                // 1-based over [MagicSuffix][MagicPrefix][automagic].
+                int affixId = Data.MagicSuffix.RowCount + row + 1;
+                cases.Add(Case("d2r-group-prefix-" + prefix.Name + "-" + n++,
+                    AffixRecord(classId, affixId, 60, prefix.Mods), Player(1, 80)));
+            }
+        }
+
+        // The roll-range bug hunt's records (D2R spawn order): ethereal ac% after the maximised
+        // base (0x1402e14c0), runeword/socket ac% assigned to the filler (0x1402d39ec), superior
+        // file index = the rolled row (0x140381dc3), set tier aprops in states 165..169 (0x140286a2b).
+        private static void AddRangeHuntCases(List<string> cases)
+        {
+            cases.Add(Case("ranges-EtherealVipermagi",
+                "{\"unitType\":4,\"classId\":360,\"quality\":7,\"itemFlags\":4194320,\"format\":100,\"fileIndex\":210,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":190},{\"id\":73,\"value\":19},{\"id\":72,\"value\":19}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":16,\"value\":120},{\"id\":39,\"value\":30},{\"id\":41,\"value\":30},{\"id\":43,\"value\":30}," + "{\"id\":45,\"value\":30},{\"id\":105,\"value\":30},{\"id\":35,\"value\":10},{\"id\":127,\"value\":1}]}]}",
+                null));
+            cases.Add(Case("ranges-EtherealSuperiorAncientArmor",
+                "{\"unitType\":4,\"classId\":326,\"quality\":3,\"itemFlags\":4194320,\"format\":100,\"fileIndex\":2,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":351},{\"id\":73,\"value\":31},{\"id\":72,\"value\":31}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":16,\"value\":10}]}]}",
+                null));
+            cases.Add(Case("ranges-PulInGrandCrown",
+                "{\"unitType\":4,\"classId\":357,\"quality\":2,\"itemFlags\":2064,\"format\":100,\"fileIndex\":-1,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":90},{\"id\":194,\"value\":1}]}]," + "\"items\":[{\"unitType\":4,\"classId\":645,\"quality\":2,\"itemFlags\":16,\"format\":100,\"statsLists\":[]}]}",
+                null));
+            cases.Add(Case("ranges-SuperiorAncientArmorDurability",
+                "{\"unitType\":4,\"classId\":326,\"quality\":3,\"itemFlags\":16,\"format\":100,\"fileIndex\":4,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":220},{\"id\":73,\"value\":60},{\"id\":72,\"value\":60}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":75,\"value\":12}]}]}",
+                null));
+            cases.Add(Case("ranges-SuperiorJavelinAttackRating",
+                "{\"unitType\":4,\"classId\":47,\"quality\":3,\"itemFlags\":16,\"format\":100,\"fileIndex\":0,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[]},{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":19,\"value\":2}]}]}",
+                null));
+            cases.Add(Case("ranges-IrathasCollar",
+                "{\"unitType\":4,\"classId\":535,\"quality\":5,\"itemFlags\":16,\"format\":100,\"fileIndex\":9,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":45,\"value\":30},{\"id\":110,\"value\":75}]}," + "{\"stateNo\":165,\"flags\":8256,\"stats\":[{\"id\":39,\"value\":15},{\"id\":41,\"value\":15},{\"id\":43,\"value\":15},{\"id\":45,\"value\":15}]}]}",
+                null));
+            cases.Add(Case("ranges-ImmortalKingsForge",
+                "{\"unitType\":4,\"classId\":384,\"quality\":5,\"itemFlags\":16,\"format\":100,\"fileIndex\":73,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":50},{\"id\":73,\"value\":24},{\"id\":72,\"value\":24}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":31,\"value\":65},{\"id\":0,\"value\":20},{\"id\":2,\"value\":20},{\"id\":201,\"layer\":2436,\"value\":12}]}," + "{\"stateNo\":165,\"flags\":8256,\"stats\":[{\"id\":93,\"value\":25}]}," + "{\"stateNo\":166,\"flags\":8256,\"stats\":[{\"id\":31,\"value\":120}]}," + "{\"stateNo\":167,\"flags\":8256,\"stats\":[{\"id\":60,\"value\":10}]}," + "{\"stateNo\":168,\"flags\":8256,\"stats\":[{\"id\":62,\"value\":10}]}," + "{\"stateNo\":169,\"flags\":8256,\"stats\":[{\"id\":134,\"value\":2}]}]}",
+                null));
+            cases.Add(Case("ranges-Fortitude", "{\"unitType\":4,\"classId\":443,\"quality\":2,\"itemFlags\":67110928,\"format\":100,\"fileIndex\":-1,\"itemLevel\":60,\"magicPrefix\":[20547,0,0],\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":500},{\"id\":73,\"value\":60},{\"id\":72,\"value\":60},{\"id\":194,\"value\":4}]},{\"stateNo\":171,\"flags\":64,\"stats\":[{\"id\":16,\"value\":200}]}]}", null));
+            cases.Add(Case("ranges-FortitudeEthereal", "{\"unitType\":4,\"classId\":443,\"quality\":2,\"itemFlags\":71305232,\"format\":100,\"fileIndex\":-1,\"itemLevel\":60,\"magicPrefix\":[20547,0,0],\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":750},{\"id\":73,\"value\":60},{\"id\":72,\"value\":60},{\"id\":194,\"value\":4}]},{\"stateNo\":171,\"flags\":64,\"stats\":[{\"id\":16,\"value\":200}]}]}", null));
+            cases.Add(Case("ranges-ImmortalKingsForgeEarned",
+                "{\"unitType\":4,\"classId\":384,\"quality\":5,\"itemFlags\":16,\"format\":100,\"fileIndex\":73,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":50},{\"id\":73,\"value\":24},{\"id\":72,\"value\":24}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":31,\"value\":65},{\"id\":0,\"value\":20},{\"id\":2,\"value\":20},{\"id\":201,\"layer\":2436,\"value\":12}]}," + "{\"stateNo\":165,\"flags\":64,\"stats\":[{\"id\":93,\"value\":25}]}," + "{\"stateNo\":166,\"flags\":64,\"stats\":[{\"id\":31,\"value\":120}]}," + "{\"stateNo\":167,\"flags\":8256,\"stats\":[{\"id\":60,\"value\":10}]}," + "{\"stateNo\":168,\"flags\":8256,\"stats\":[{\"id\":62,\"value\":10}]}," + "{\"stateNo\":169,\"flags\":8256,\"stats\":[{\"id\":134,\"value\":2}]}]}",
+                null));
+            cases.Add(Case("ranges-StormshieldLevel80",
+                "{\"unitType\":4,\"classId\":447,\"quality\":7,\"itemFlags\":16,\"format\":100,\"fileIndex\":253,\"itemLevel\":80," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":140},{\"id\":73,\"value\":86},{\"id\":72,\"value\":86}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":214,\"value\":30},{\"id\":36,\"value\":35},{\"id\":0,\"value\":30},{\"id\":152,\"value\":1}," + "{\"id\":20,\"value\":25},{\"id\":41,\"value\":25},{\"id\":43,\"value\":60},{\"id\":128,\"value\":10}]}]}",
+                "{\"unitType\":0,\"classId\":1,\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":12,\"value\":80},{\"id\":0,\"value\":200},{\"id\":2,\"value\":100}]}]}"));
+
+            const string vipermagiWithUm =
+                "{\"unitType\":4,\"classId\":360,\"quality\":7,\"itemFlags\":2064,\"format\":100,\"fileIndex\":210,\"itemLevel\":60," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":127},{\"id\":73,\"value\":38},{\"id\":72,\"value\":38},{\"id\":194,\"value\":1}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":16,\"value\":120},{\"id\":39,\"value\":30},{\"id\":41,\"value\":30},{\"id\":43,\"value\":30}," + "{\"id\":45,\"value\":30},{\"id\":105,\"value\":30},{\"id\":35,\"value\":10},{\"id\":127,\"value\":1}]}]," + "\"items\":[{\"unitType\":4,\"classId\":646,\"quality\":2,\"itemFlags\":16,\"format\":100,\"statsLists\":RUNE}]}";
+            cases.Add(Case("ranges-VipermagiUmClient", vipermagiWithUm.Replace("RUNE", "[]"), null));
+            cases.Add(Case("ranges-VipermagiUmServer",
+                vipermagiWithUm.Replace("RUNE", "[{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":39,\"value\":15},{\"id\":41,\"value\":15},{\"id\":43,\"value\":15},{\"id\":45,\"value\":15}]}]"),
+                null));
+
+            cases.Add(Case("ranges-ClassicMilabregasRobe",
+                "{\"unitType\":4,\"classId\":326,\"quality\":5,\"itemFlags\":16,\"format\":0,\"fileIndex\":24,\"itemLevel\":30," + "\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648,\"stats\":[{\"id\":31,\"value\":225},{\"id\":73,\"value\":60},{\"id\":72,\"value\":60}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":78,\"value\":3},{\"id\":34,\"value\":2}]}]}",
+                null));
+
+            const string upgradedVipermagi =
+                "{\"unitType\":4,\"classId\":430,\"quality\":7,\"itemFlags\":FLAGS,\"format\":100,\"fileIndex\":210,\"itemLevel\":60,\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648," + "\"stats\":[{\"id\":31,\"value\":BASE},{\"id\":73,\"value\":36},{\"id\":72,\"value\":36}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":16,\"value\":120},{\"id\":39,\"value\":30},{\"id\":41,\"value\":30}," + "{\"id\":43,\"value\":30},{\"id\":45,\"value\":30},{\"id\":105,\"value\":30},{\"id\":35,\"value\":10},{\"id\":127,\"value\":1}]}]}";
+            cases.Add(Case("ranges-UpgradedVipermagi",
+                upgradedVipermagi.Replace("FLAGS", "16").Replace("BASE", "400"), null));
+            cases.Add(Case("ranges-UpgradedVipermagiEthereal",
+                upgradedVipermagi.Replace("FLAGS", "4194320").Replace("BASE", "600"), null));
+
+            // Holy (`ac%` 81..100) on Wyrmhide, a base an upgrade can produce.
+            cases.Add(Case("ranges-RareWyrmhide",
+                "{\"unitType\":4,\"classId\":430,\"quality\":6,\"itemFlags\":16,\"format\":100,\"fileIndex\":-1,\"itemLevel\":60," + "\"magicPrefix\":[" + (Data.MagicSuffix.RowCount + 7) + ",0,0],\"statsLists\":[{\"stateNo\":0,\"flags\":2147483648," + "\"stats\":[{\"id\":31,\"value\":471},{\"id\":73,\"value\":36},{\"id\":72,\"value\":36}]}," + "{\"stateNo\":0,\"flags\":64,\"stats\":[{\"id\":16,\"value\":90}]}]}",
+                null));
+        }
+
+
+        private static string Worn(string code, int bodyLocation, int flags)
+        {
+            return "{ \"unitType\": 4, \"classId\": " + Items.ClassIdForCode(code)
+                + ", \"quality\": 2, \"itemFlags\": " + flags
+                + ", \"location\": 1, \"x\": " + bodyLocation + " }";
+        }
+
+        private static string MasteryViewer(
+            int classId, int statId, int layer, int value, int lastUsedSkill = -1, int dexterity = 100,
+            string carried = null)
+        {
+            return "{ \"unitType\": 0, \"classId\": " + classId + ", \"flagsEx\": 33554432"
+                + (lastUsedSkill < 0 ? string.Empty : ", \"lastUsedSkill\": " + lastUsedSkill)
+                + (carried == null ? string.Empty : ", \"items\": [ " + carried + " ]")
+                + ", \"statsLists\": [ { \"stateNo\": 0, \"flags\": 2147483648, \"stats\": [ "
+                + "{ \"id\": 12, \"value\": 90 }, { \"id\": 0, \"value\": 100 }, "
+                + "{ \"id\": 2, \"value\": " + dexterity + " }, "
+                + "{ \"id\": " + statId + ", \"layer\": " + layer + ", \"value\": " + value + " } ] } ] }";
+        }
+
         private static string Case(
-            string name, string record, string player, string set = null, int shopMode = 0)
+            string name, string record, string player, string set = null, int shopMode = 0,
+            int difficulty = 0, bool desecrated = false)
         {
             var builder = new StringBuilder("{ \"name\": \"")
                 .Append(name).Append("\", \"record\": ").Append(record);
@@ -1478,6 +2049,16 @@ namespace D2ItemToolkit.Tools
             if (shopMode != 0)
             {
                 builder.Append(", \"shopMode\": ").Append(shopMode);
+            }
+
+            if (difficulty != 0)
+            {
+                builder.Append(", \"difficulty\": ").Append(difficulty);
+            }
+
+            if (desecrated)
+            {
+                builder.Append(", \"desecratedZones\": true");
             }
 
             return builder.Append(" }").ToString();

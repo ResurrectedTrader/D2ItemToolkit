@@ -1,9 +1,19 @@
 import { AnimDataFile } from '../Data/AnimDataFile.js';
 import { embeddedFiles, embeddedSource, hasEmbeddedData } from '../Data/EmbeddedData.js';
+import { GameVariant, type ResurrectedTextOptions } from '../Data/GameVariant.js';
+import { JsonStringTable } from '../Data/JsonStringTable.js';
+import type { StringTable } from '../Data/StringTable.js';
 import { TblFile, TblStringTable } from '../Data/TblFile.js';
 import { TxtFile } from '../Data/TxtFile.js';
 import { crtQsort } from './CrtQsort.js';
+import { ItemParamLinker } from './ItemParamLinker.js';
+import {
+  type ISkillItemProcSource,
+  readSkillItemProc,
+  type SkillItemProc,
+} from '../Description/SkillDescCalc.js';
 import type { CharacterClassRow, MonsterRow, MonsterTypeRow, SkillRow } from './TableRows.js';
+import type { ItemStatLevelOpEntry } from '../Stats/ItemStatOps.js';
 import {
   DescStringIds,
   type ICharacterClassTable,
@@ -26,7 +36,9 @@ import {
 } from '../Data/TxtDataSource.js';
 
 export class D2DataFiles {
-  readonly strings: TblStringTable;
+  /** The game this data set describes; the engine branches on it. */
+  readonly variant: GameVariant;
+  readonly strings: StringTable;
   readonly itemStatCost: TxtItemStatCostTable;
   readonly skills: TxtSkillTable;
   readonly classes: TxtCharacterClassTable;
@@ -72,7 +84,41 @@ export class D2DataFiles {
   readonly cubeMain: TxtFile | null;
   readonly experience: TxtFile | null;
   readonly properties: TxtFile | null;
+
+  /**
+   * D2R only: the kind-1 targets of a property cell, sub_140214F40 0x140214fb9.
+   *
+   * @internal The C# peer is `internal`.
+   */
+  readonly propertyGroups: TxtFile | null;
   readonly skillRows: TxtFile | null;
+
+  /**
+   * MonType.txt as rows — the second name table of DATATBLS_ItemParamLinker.
+   *
+   * @internal The C# peer is `internal`.
+   */
+  readonly monTypeRows: TxtFile | null;
+
+  /**
+   * states.txt; D2R only, for DATATBLS_ItemParamLinker's third name table.
+   *
+   * @internal The C# peer is `internal`.
+   */
+  readonly states: TxtFile | null;
+
+  private _paramLinker: ItemParamLinker | null = null;
+
+  /**
+   * DATATBLS_ItemParamLinker 0x140214e40: how a property param cell becomes a number.
+   *
+   * @internal The C# peer is `internal`. Reachable inside the package, absent from the published
+   * surface.
+   */
+  get paramLinker(): ItemParamLinker {
+    return (this._paramLinker ??= new ItemParamLinker(this));
+  }
+
   readonly playerTypes: TxtFile | null;
   readonly playerModes: TxtFile | null;
 
@@ -91,6 +137,9 @@ export class D2DataFiles {
   // linker field over elemtypes.txt `code`, whose ROW INDEX is the stored value (0x612993).
   readonly missiles: TxtFile | null;
   readonly elementTypes: TxtFile | null;
+
+  // D2R only: the belt-size line reads numboxes off this, 0x1401d584f.
+  readonly belts: TxtFile | null;
 
   /** AnimData.D2's parser lives outside this slice, so the raw bytes are kept for it. */
   readonly animDataBytes: Uint8Array | null;
@@ -171,63 +220,172 @@ export class D2DataFiles {
       names.push('global.' + name);
     }
 
+    // The D2R trees exist only in the embedded blob, under the C# resources' `d2r.` names.
+    if (embedded) {
+      for (const tree of [
+        'd2r/excel',
+        'd2r/excel/base',
+        'd2r/strings',
+        'd2r/strings-legacy',
+        'd2r/global',
+      ]) {
+        for (const name of embeddedFiles(tree)) {
+          names.push(tree.replaceAll('/', '.') + '.' + name);
+        }
+      }
+    }
+
     return names;
   }
 
   static build(excel: ByteSource, locale: ByteSource, global: ByteSource): D2DataFiles {
-    return new D2DataFiles(excel, locale, global);
-  }
-
-  private constructor(excel: ByteSource, locale: ByteSource, global: ByteSource) {
     const strings = new TblStringTable(
       parseTbl(locale('string.tbl')),
       parseTbl(locale('patchstring.tbl')),
       parseTbl(locale('expansionstring.tbl')),
     );
 
+    return new D2DataFiles(GameVariant.Lod114d, excel, strings, global);
+  }
+
+  /** The embedded tables for one variant. The D2R variants default to HD English strings. */
+  static loadEmbedded(
+    variant: GameVariant = GameVariant.Lod114d,
+    options: ResurrectedTextOptions | null = null,
+  ): D2DataFiles {
+    if (variant === GameVariant.Lod114d) {
+      return D2DataFiles.load();
+    }
+
+    // The embedded base/ holds only the tables that differ from excel/; the rest are
+    // byte-identical, so falling through to excel/ reads the same bytes.
+    const main = embeddedSource('d2r/excel');
+    const base = embeddedSource('d2r/excel/base');
+    const excel: ByteSource =
+      variant === GameVariant.Resurrected ? name => base(name) ?? main(name) : main;
+
+    return D2DataFiles.buildResurrected(
+      variant,
+      excel,
+      embeddedSource('d2r/strings'),
+      embeddedSource('d2r/strings-legacy'),
+      embeddedSource('d2r/global'),
+      options,
+    );
+  }
+
+  /**
+   * A D2R data set from byte sources: `excel` is `data/global/excel` (or its `base`
+   * subdirectory), `strings` is `data/local/lng/strings`, with `strings-legacy` beside it.
+   */
+  static buildResurrected(
+    variant: GameVariant,
+    excel: ByteSource,
+    strings: ByteSource,
+    legacyStrings: ByteSource | null,
+    global: ByteSource,
+    options: ResurrectedTextOptions | null = null,
+  ): D2DataFiles {
+    if (variant === GameVariant.Lod114d) {
+      throw new Error('buildResurrected needs a Diablo II: Resurrected variant');
+    }
+
+    const table = new JsonStringTable(
+      strings,
+      legacyStrings,
+      options?.legacyGraphics ?? false,
+      options?.language ?? 'enUS',
+    );
+
+    return new D2DataFiles(variant, excel, table, global);
+  }
+
+  /** A D2R extraction read from disk; see {@link D2DataFiles.buildResurrected}. */
+  static loadResurrected(
+    variant: GameVariant,
+    excelDirectory: string,
+    stringsDirectory: string,
+    legacyStringsDirectory: string | null = null,
+    globalDirectory: string | null = null,
+    options: ResurrectedTextOptions | null = null,
+  ): D2DataFiles {
+    return D2DataFiles.buildResurrected(
+      variant,
+      directorySource(excelDirectory),
+      directorySource(stringsDirectory),
+      legacyStringsDirectory === null ? null : directorySource(legacyStringsDirectory),
+      directorySource(globalDirectory),
+      options,
+    );
+  }
+
+  /** The D2R locale (enUS, deDE, ...); null for 1.14d. */
+  get resurrectedLanguage(): string | null {
+    return this.strings instanceof JsonStringTable ? this.strings.language : null;
+  }
+
+  get isResurrected(): boolean {
+    return this.variant !== GameVariant.Lod114d;
+  }
+
+  private constructor(
+    variant: GameVariant,
+    excel: ByteSource,
+    strings: StringTable,
+    global: ByteSource,
+  ) {
+    this.variant = variant;
     this.strings = strings;
-    this.itemStatCost = new TxtItemStatCostTable(required(excel, 'ItemStatCost.txt'), strings);
+
+    this.itemStatCost = new TxtItemStatCostTable(
+      required(excel, variant, 'ItemStatCost.txt'),
+      strings,
+    );
     this.skills = new TxtSkillTable(
-      required(excel, 'skills.txt'),
-      optional(excel, 'skilldesc.txt'),
+      required(excel, variant, 'skills.txt'),
+      optional(excel, variant, 'skilldesc.txt'),
       strings,
-      optional(excel, 'PlayerClass.txt'),
+      optional(excel, variant, 'PlayerClass.txt'),
     );
-    this.classes = new TxtCharacterClassTable(required(excel, 'charstats.txt'), strings);
+    this.classes = new TxtCharacterClassTable(required(excel, variant, 'charstats.txt'), strings);
     this.monsterTypes = new TxtMonsterTypeTable(
-      optional(excel, 'MonType.txt'),
-      optional(excel, 'monstats.txt'),
+      optional(excel, variant, 'MonType.txt'),
+      optional(excel, variant, 'monstats.txt'),
       strings,
     );
-    this.itemTypes = optional(excel, 'ItemTypes.txt');
-    this.weapons = optional(excel, 'weapons.txt');
-    this.armor = optional(excel, 'armor.txt');
-    this.misc = optional(excel, 'misc.txt');
-    this.uniqueItems = optional(excel, 'UniqueItems.txt');
-    this.setItems = optional(excel, 'SetItems.txt');
-    this.sets = optional(excel, 'sets.txt');
-    this.magicSuffix = optional(excel, 'MagicSuffix.txt');
-    this.magicPrefix = optional(excel, 'MagicPrefix.txt');
-    this.autoMagic = optional(excel, 'automagic.txt');
-    this.rareSuffix = optional(excel, 'RareSuffix.txt');
-    this.rarePrefix = optional(excel, 'RarePrefix.txt');
-    this.lowQualityItems = optional(excel, 'lowqualityitems.txt');
-    this.qualityItems = optional(excel, 'qualityitems.txt');
-    this.charStats = optional(excel, 'charstats.txt');
-    this.gems = optional(excel, 'gems.txt');
-    this.runes = optional(excel, 'Runes.txt');
-    this.cubeMain = optional(excel, 'cubemain.txt');
-    this.colors = optional(excel, 'colors.txt');
-    this.experience = optional(excel, 'Experience.txt');
-    this.properties = optional(excel, 'Properties.txt');
-    this.skillRows = optional(excel, 'skills.txt');
-    this.playerTypes = optional(excel, 'PlrType.txt');
-    this.playerModes = optional(excel, 'PlrMode.txt');
-    this.monsterStats = optional(excel, 'monstats.txt');
-    this.monsterStats2 = optional(excel, 'monstats2.txt');
-    this.monsterModes = optional(excel, 'MonMode.txt');
-    this.missiles = optional(excel, 'Missiles.txt');
-    this.elementTypes = optional(excel, 'ElemTypes.txt');
+    this.itemTypes = optional(excel, variant, 'ItemTypes.txt');
+    this.weapons = optional(excel, variant, 'weapons.txt');
+    this.armor = optional(excel, variant, 'armor.txt');
+    this.misc = optional(excel, variant, 'misc.txt');
+    this.uniqueItems = optional(excel, variant, 'UniqueItems.txt');
+    this.setItems = optional(excel, variant, 'SetItems.txt');
+    this.sets = optional(excel, variant, 'sets.txt');
+    this.magicSuffix = optional(excel, variant, 'MagicSuffix.txt');
+    this.magicPrefix = optional(excel, variant, 'MagicPrefix.txt');
+    this.autoMagic = optional(excel, variant, 'automagic.txt');
+    this.rareSuffix = optional(excel, variant, 'RareSuffix.txt');
+    this.rarePrefix = optional(excel, variant, 'RarePrefix.txt');
+    this.lowQualityItems = optional(excel, variant, 'lowqualityitems.txt');
+    this.qualityItems = optional(excel, variant, 'qualityitems.txt');
+    this.charStats = optional(excel, variant, 'charstats.txt');
+    this.gems = optional(excel, variant, 'gems.txt');
+    this.runes = optional(excel, variant, 'Runes.txt');
+    this.cubeMain = optional(excel, variant, 'cubemain.txt');
+    this.colors = optional(excel, variant, 'colors.txt');
+    this.experience = optional(excel, variant, 'Experience.txt');
+    this.properties = optional(excel, variant, 'Properties.txt');
+    this.propertyGroups = optional(excel, variant, 'propertygroups.txt');
+    this.skillRows = optional(excel, variant, 'skills.txt');
+    this.monTypeRows = optional(excel, variant, 'MonType.txt');
+    this.states = optional(excel, variant, 'states.txt');
+    this.playerTypes = optional(excel, variant, 'PlrType.txt');
+    this.playerModes = optional(excel, variant, 'PlrMode.txt');
+    this.monsterStats = optional(excel, variant, 'monstats.txt');
+    this.monsterStats2 = optional(excel, variant, 'monstats2.txt');
+    this.monsterModes = optional(excel, variant, 'MonMode.txt');
+    this.missiles = optional(excel, variant, 'Missiles.txt');
+    this.elementTypes = optional(excel, variant, 'ElemTypes.txt');
+    this.belts = optional(excel, variant, 'belts.txt');
 
     this.animDataBytes = global('AnimData.D2');
   }
@@ -237,13 +395,13 @@ function parseTbl(bytes: Uint8Array | null): TblFile | null {
   return bytes === null ? null : TblFile.parse(bytes);
 }
 
-function optional(source: ByteSource, name: string): TxtFile | null {
+function optional(source: ByteSource, variant: GameVariant, name: string): TxtFile | null {
   const bytes = source(name);
-  return bytes === null ? null : TxtFile.load(bytes);
+  return bytes === null ? null : TxtFile.load(bytes, variant);
 }
 
-function required(source: ByteSource, name: string): TxtFile {
-  const file = optional(source, name);
+function required(source: ByteSource, variant: GameVariant, name: string): TxtFile {
+  const file = optional(source, variant, name);
   if (file === null) {
     throw new Error('Required data file not found: ' + name);
   }
@@ -256,11 +414,11 @@ export const TxtKeys = {
   //   absent -> the defaults loop writes 0 (0x6bdfd4), so the engine resolves string.tbl[0];
   //   blank  -> the converter runs and DATATBLS_LookupStringId substitutes 5382 (0x6117c6).
   // Resolving unconditionally prints "an evil force" where the game prints Warriv gossip.
-  id(file: TxtFile, row: number, column: string, strings: TblStringTable): number {
+  id(file: TxtFile, row: number, column: string, strings: StringTable): number {
     return file.hasColumn(column) ? strings.resolveKey(file.getString(row, column)) : 0;
   },
 
-  text(file: TxtFile, row: number, column: string, strings: TblStringTable): string | null {
+  text(file: TxtFile, row: number, column: string, strings: StringTable): string | null {
     return strings.getByIndex(TxtKeys.id(file, row, column, strings));
   },
 };
@@ -283,6 +441,13 @@ export class TxtItemStatCostTable implements IItemStatCostTable, IItemStatOpTabl
     return this._opEntries;
   }
 
+  private readonly _levelOpEntries: readonly ItemStatLevelOpEntry[];
+
+  /** @internal The C# peer is `internal`. */
+  get levelScaledEntries(): readonly ItemStatLevelOpEntry[] {
+    return this._levelOpEntries;
+  }
+
   statIdForName(name: string | null): number {
     if (name === null || name.length === 0) {
       return -1;
@@ -292,7 +457,7 @@ export class TxtItemStatCostTable implements IItemStatCostTable, IItemStatOpTabl
     return id === undefined ? -1 : id;
   }
 
-  constructor(file: TxtFile, strings: TblStringTable) {
+  constructor(file: TxtFile, strings: StringTable) {
     for (let row = 0; row < file.rowCount; ++row) {
       const name = file.getString(row, 'Stat');
       const key = name.toLowerCase();
@@ -301,9 +466,10 @@ export class TxtItemStatCostTable implements IItemStatCostTable, IItemStatOpTabl
       }
     }
 
-    // op 13 only. The other ops either cannot fire on an item's statlist (owner-type gates
+    // op 13 here. The other ops either cannot fire on an item's statlist (owner-type gates
     // at 0x626259 onward) or are unreachable with shipped data — 6/7 need act and
-    // period-of-day and their only two users are unspawnable.
+    // period-of-day and their only two users are unspawnable — except D2R's ops 4/5, which
+    // fire on the unit the item is attached to and are collected separately below.
     const ops: ItemStatOpEntry[] = [];
     for (let row = 0; row < file.rowCount; ++row) {
       if (file.getInt(row, 'op') !== 13) {
@@ -320,6 +486,38 @@ export class TxtItemStatCostTable implements IItemStatCostTable, IItemStatOpTabl
     }
 
     this._opEntries = ops;
+
+    // Ops 4 and 5: the rows DATATBLS_LoadItemStatCostTxt marks for re-evaluation when the list is
+    // attached to a unit (+0x4F, 0x14021bc6d-0x14021bc79).
+    const levelOps: ItemStatLevelOpEntry[] = [];
+    for (let row = 0; row < file.rowCount; ++row) {
+      const op = file.getInt(row, 'op');
+      if (op !== 4 && op !== 5) {
+        continue;
+      }
+
+      const opBase = this._byName.get(file.getString(row, 'op base').toLowerCase());
+      if (opBase === undefined) {
+        continue;
+      }
+
+      for (const column of TxtItemStatCostTable.OpStatColumns) {
+        const target = file.getString(row, column);
+        const targetRow = this._byName.get(target.toLowerCase());
+        if (target.length !== 0 && targetRow !== undefined) {
+          levelOps.push({
+            sourceStat: row,
+            targetStat: targetRow,
+            op,
+            opParam: file.getInt(row, 'op param'),
+            opBase,
+            opBaseShift: file.getInt(opBase, 'ValShift'),
+          });
+        }
+      }
+    }
+
+    this._levelOpEntries = levelOps;
 
     this._stats = new Array<StatDescriptor>(file.rowCount);
 
@@ -418,7 +616,7 @@ export class TxtItemStatCostTable implements IItemStatCostTable, IItemStatOpTabl
   }
 }
 
-function keyId(file: TxtFile, row: number, column: string, strings: TblStringTable): number {
+function keyId(file: TxtFile, row: number, column: string, strings: StringTable): number {
   return TxtKeys.id(file, row, column, strings);
 }
 
@@ -475,8 +673,9 @@ function toByte(value: number): number {
   return value & 0xff;
 }
 
-export class TxtSkillTable implements ISkillTable {
+export class TxtSkillTable implements ISkillTable, ISkillItemProcSource {
   private readonly _names: (string | null)[];
+  private readonly _itemProcs: (SkillItemProc | null)[];
   private readonly _classes: number[];
   private readonly _requiredLevels: number[];
   private readonly _maxLevels: number[];
@@ -486,12 +685,13 @@ export class TxtSkillTable implements ISkillTable {
   constructor(
     skills: TxtFile,
     skillDesc: TxtFile | null,
-    strings: TblStringTable,
+    strings: StringTable,
     playerClass: TxtFile | null = null,
   ) {
     this._classCodes = buildClassCodes(playerClass);
 
     this._names = new Array<string | null>(skills.rowCount).fill(null);
+    this._itemProcs = new Array<SkillItemProc | null>(skills.rowCount).fill(null);
     this._classes = new Array<number>(skills.rowCount).fill(0);
     this._requiredLevels = new Array<number>(skills.rowCount).fill(0);
 
@@ -526,6 +726,7 @@ export class TxtSkillTable implements ISkillTable {
         continue;
       }
 
+      this._itemProcs[row] = readSkillItemProc(skills, row, skillDesc, descRow, strings);
       const name = TxtKeys.text(skillDesc, descRow, 'str name', strings);
 
       if (name !== null) {
@@ -575,6 +776,12 @@ export class TxtSkillTable implements ISkillTable {
 
   skillExists(skillId: number): boolean {
     return skillId >= 0 && skillId < this.rowCount;
+  }
+
+  getItemProc(skillId: number): SkillItemProc | null {
+    return skillId >= 0 && skillId < this._itemProcs.length
+      ? (this._itemProcs[skillId] ?? null)
+      : null;
   }
 
   getSkillName(skillId: number): string | null {
@@ -650,7 +857,7 @@ export class TxtCharacterClassTable implements ICharacterClassTable {
     return this._allSkills.length;
   }
 
-  constructor(file: TxtFile, strings: TblStringTable) {
+  constructor(file: TxtFile, strings: StringTable) {
     this._allSkills = new Array<string | null>(file.rowCount).fill(null);
     this._skillTabs = new Array<(string | null)[]>(file.rowCount);
     this._classOnly = new Array<string | null>(file.rowCount).fill(null);
@@ -710,7 +917,7 @@ export class TxtCharacterClassTable implements ICharacterClassTable {
   }
 }
 
-function text(file: TxtFile, row: number, column: string, strings: TblStringTable): string | null {
+function text(file: TxtFile, row: number, column: string, strings: StringTable): string | null {
   return TxtKeys.text(file, row, column, strings);
 }
 
@@ -728,7 +935,7 @@ export class TxtMonsterTypeTable implements IMonsterTypeTable {
     return this._monsterNames.length;
   }
 
-  constructor(monType: TxtFile | null, monStats: TxtFile | null, strings: TblStringTable) {
+  constructor(monType: TxtFile | null, monStats: TxtFile | null, strings: StringTable) {
     const typeRows = monType === null ? 0 : monType.rowCount;
     this._typeNames = new Array<string | null>(typeRows).fill(null);
 

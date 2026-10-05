@@ -82,6 +82,15 @@ namespace D2ItemToolkit
         public int UnitType = -1;
         public int ClassId = -1;
 
+        /// <summary>D2R: pSkillList->pUsedSkill's id, or -1. See <see cref="IUnit.LastUsedSkill"/>.</summary>
+        public int LastUsedSkill = -1;
+
+        /// <summary>
+        /// The viewer's body-location grid, 0..12, from its carried items at location 1 — what
+        /// UNITS_Has_Two_Melee_Equipped 0x140239c30 walks. Empty for a viewer that carries nothing.
+        /// </summary>
+        public readonly ItemIdentity[] Body = new ItemIdentity[13];
+
         // Derived from the viewer's own stat lists, not stated: level is stat 12, strength 0,
         // dexterity 2 — exactly what STATLIST_UnitGetStatValue reads.
         public int Level;
@@ -209,6 +218,19 @@ namespace D2ItemToolkit
             var viewer = new ItemViewer();
             viewer.UnitType = player.UnitType;
             viewer.ClassId = player.ClassId;
+            viewer.LastUsedSkill = player.LastUsedSkill;
+
+            // A carried item at location 1 is equipped and `x` is its body location. The active
+            // weapon set always sits at 4/5 — a swap physically moves the items to 11/12
+            // (INVENTORY_PositionItems 0x14013fe40).
+            foreach (IUnit carried in player.Items)
+            {
+                if (carried != null && carried.Location == 1 && carried.X >= 0
+                    && carried.X < viewer.Body.Length)
+                {
+                    viewer.Body[carried.X] = ReadIdentity(carried);
+                }
+            }
 
             var stats = new Dictionary<int, int>();
             foreach (ItemStatGroup group in ItemStatReader.EnumerateOwnGroups(player))

@@ -67,6 +67,7 @@ namespace D2ItemToolkit
         private readonly ItemTable _items;
         private readonly ItemTypeTree _types;
         private readonly TxtSkillTable _skills;
+        private readonly bool _resurrected;
 
         private readonly RollEnd _end;
 
@@ -78,6 +79,7 @@ namespace D2ItemToolkit
             _items = items;
             _types = types;
             _skills = data.Skills;
+            _resurrected = data.IsResurrected;
             _end = end;
         }
 
@@ -121,6 +123,13 @@ namespace D2ItemToolkit
                     break;
                 }
 
+                // D2R's handler table (0x14156f860) is null at 26..35, and AssignProperty stops the
+                // walk on a null slot (0x14028a588).
+                if (_resurrected && func >= FirstEmptyResurrectedHandler && func <= LastEmptyResurrectedHandler)
+                {
+                    break;
+                }
+
                 // nPropMode is deliberately not threaded past here. It selects WHICH properties get
                 // applied and from where — the switch at ItemMods.cpp:2362, which the caller has
                 // already done by enumerating the gems.txt or sets.txt row — not how one property
@@ -137,6 +146,16 @@ namespace D2ItemToolkit
                     carried = result;
                 }
             }
+        }
+
+        /// <summary>
+        /// The write ITEMMODS_PropertyFunc25 0x140289d70 makes once its stat is picked: a roll over
+        /// nMin..nMax (0x140289f74) onto layer 0, through AddPropertyToItemStatList with the
+        /// caller's nSet (0x140289fb2). The pick itself is the reconstruction's to enumerate.
+        /// </summary>
+        public void ApplyStatPick(int nSet, int statId, ItemProperty property, IDictionary<int, int> into)
+        {
+            AddStat(nSet, statId, Roll(property), 0, into);
         }
 
         // dword_745B54 is 37; slots 25..35 are null and 36 is the uber handler.
@@ -532,7 +551,7 @@ namespace D2ItemToolkit
                 return -1;
             }
 
-            return _types.MaxSockets(_types.Row(_items.PrimaryTypeCode(item.ClassId)), item.ItemLevel);
+            return _types.MaxSockets(_types.Row(_items.PrimaryTypeCode(item.ClassId)), ItemLevel(item));
         }
 
         /// <summary>
@@ -549,13 +568,15 @@ namespace D2ItemToolkit
                 return -1;
             }
 
+            int itemLevel = ItemLevel(item);
+
             int required = SkillRequiredLevel(skill);
 
             if (max == 0)
             {
                 // `(ilvl - req) / 4 + 1`, the divide truncating toward zero (`and edx, 3` then
                 // `sar eax, 2` at 0x65f71a).
-                int raw = (item.ItemLevel - required) / 4 + 1;
+                int raw = (itemLevel - required) / 4 + 1;
 
                 // Clamped against the skill's own maxlvl, and note the comparison uses the
                 // FLOORED value while the result keeps the raw one (0x65f72e..0x65f748).
@@ -579,10 +600,24 @@ namespace D2ItemToolkit
                 step = 1;
             }
 
-            int level = (item.ItemLevel - required) / step;
+            int level = (itemLevel - required) / step;
 
             // Floored at 1, as the other arm is (0x65f797).
             return level < 1 ? 1 : level;
+        }
+
+        private const int FirstEmptyResurrectedHandler = 26;
+        private const int LastEmptyResurrectedHandler = 35;
+
+        /// <summary>
+        /// A recorded item level. D2R floors a level below 1 to 1 and writes it back before the
+        /// socket cap (0x14022bcdb), func 11 (0x140288f13) and func 19 (0x1402891b0) read it.
+        /// </summary>
+        private int ItemLevel(ItemIdentity item)
+        {
+            // Only 0 can be below 1 here: -1 means the record carries no level, which the callers
+            // report rather than guess.
+            return _resurrected && item.ItemLevel == 0 ? 1 : item.ItemLevel;
         }
 
         private int SkillRequiredLevel(int skill)

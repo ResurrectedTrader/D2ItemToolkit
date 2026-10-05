@@ -47,11 +47,18 @@ namespace D2ItemToolkit
 
         private const int MaxHeaderFields = 280;
 
+        private const int ResurrectedMaxHeaderFields = 350;
+
         // The compiler tokenizes RAW BYTES (0x6bd714 `mov al,[esi]`) and never decodes anything, so
         // each byte must survive as one char. File.ReadAllText would decode UTF-8 and fold every
         // invalid byte to U+FFFD: objects.txt (two 0x85) and UniqueItems.txt (one 0x92, in
         // "Hunter's Bow") both contain bytes that are not valid UTF-8.
         public static TxtFile Load(byte[] bytes)
+        {
+            return Load(bytes, GameVariant.Lod114d);
+        }
+
+        public static TxtFile Load(byte[] bytes, GameVariant variant)
         {
             if (bytes == null) throw new ArgumentNullException("bytes");
 
@@ -61,7 +68,7 @@ namespace D2ItemToolkit
                 chars[i] = (char)bytes[i];
             }
 
-            return Parse(new string(chars));
+            return Parse(new string(chars), variant);
         }
 
         private static string[] SplitCells(string line)
@@ -78,7 +85,19 @@ namespace D2ItemToolkit
 
         public static TxtFile Parse(string content)
         {
+            return Parse(content, GameVariant.Lod114d);
+        }
+
+        public static TxtFile Parse(string content, GameVariant variant)
+        {
             if (content == null) throw new ArgumentNullException("content");
+
+            // D2R's tokeniser (sub_140760c70) also ends a row on a bare LF (0x140760d7a) and allows
+            // 350 header fields (0x140760dcf). Every shipped D2R file is CRLF throughout.
+            if (variant != GameVariant.Lod114d)
+            {
+                content = content.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            }
 
             // Rows terminate on CRLF and ONLY CRLF. The scanner tests just TAB (0x6bd718) and CR
             // (0x6bd722), and a CR must be followed by LF or it halts (0x6bd733). 0x0A matches
@@ -91,11 +110,12 @@ namespace D2ItemToolkit
 
             // 0x6bd6f6 `cmp eax, 118h` / 0x6bd6fb `jbe`: more than 280 header fields halts the game
             // (error 0x67). The column map is a _WORD[280]. Shipped maximum is skills.txt at 256.
-            if (header.Length > MaxHeaderFields)
+            int limit = variant == GameVariant.Lod114d ? MaxHeaderFields : ResurrectedMaxHeaderFields;
+            if (header.Length > limit)
             {
                 throw new InvalidDataException(
                     "Malformed .txt: " + header.Length + " header fields exceeds the loader's " +
-                    "limit of " + MaxHeaderFields + " (the game halts at 0x6bd6fd).");
+                    "limit of " + limit + ".");
             }
             for (int i = 0; i < header.Length; ++i)
             {

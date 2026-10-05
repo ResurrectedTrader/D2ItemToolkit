@@ -71,6 +71,7 @@ export class PropertyApplier {
   private readonly _items: ItemTable;
   private readonly _types: ItemTypeTree;
   private readonly _skills: TxtSkillTable | null;
+  private readonly _resurrected: boolean;
   private readonly _end: RollEnd;
 
   constructor(
@@ -84,6 +85,7 @@ export class PropertyApplier {
     this._items = items;
     this._types = types;
     this._skills = data.skills;
+    this._resurrected = data.isResurrected;
     this._end = end;
   }
 
@@ -129,6 +131,16 @@ export class PropertyApplier {
         break;
       }
 
+      // D2R's handler table (0x14156f860) is null at 26..35, and AssignProperty stops the walk on
+      // a null slot (0x14028a588).
+      if (
+        this._resurrected &&
+        func >= PropertyApplier.FirstEmptyResurrectedHandler &&
+        func <= PropertyApplier.LastEmptyResurrectedHandler
+      ) {
+        break;
+      }
+
       // nPropMode is deliberately not threaded past here. It selects WHICH properties get applied
       // and from where — the switch at ItemMods.cpp:2362, which the caller has already done by
       // enumerating the gems.txt or sets.txt row — not how one property behaves. Exactly one
@@ -151,6 +163,20 @@ export class PropertyApplier {
         carried = result;
       }
     }
+  }
+
+  /**
+   * The write ITEMMODS_PropertyFunc25 0x140289d70 makes once its stat is picked: a roll over
+   * nMin..nMax (0x140289f74) onto layer 0, through AddPropertyToItemStatList with the caller's nSet
+   * (0x140289fb2). The pick itself is the reconstruction's to enumerate.
+   */
+  applyStatPick(
+    nSet: number,
+    statId: number,
+    property: ItemProperty,
+    into: Map<number, number>,
+  ): void {
+    this.addStat(nSet, statId, this.roll(property), into);
   }
 
   // dword_745B54 is 37; slots 25..35 are null and 36 is the uber handler.
@@ -494,7 +520,7 @@ export class PropertyApplier {
 
     return this._types.maxSockets(
       this._types.row(this._items.primaryTypeCode(item.classId)),
-      item.itemLevel,
+      this.itemLevel(item),
     );
   }
 
@@ -510,12 +536,14 @@ export class PropertyApplier {
       return -1;
     }
 
+    const itemLevel = this.itemLevel(item);
+
     const required = this.skillRequiredLevel(skill);
 
     if (max === 0) {
       // `(ilvl - req) / 4 + 1`, the divide truncating toward zero (`and edx, 3` then `sar eax, 2`
       // at 0x65f71a).
-      const raw = Int32.div(item.itemLevel - required, 4) + 1;
+      const raw = Int32.div(itemLevel - required, 4) + 1;
 
       // Clamped against the skill's own maxlvl, and note the comparison uses the FLOORED value
       // while the result keeps the raw one (0x65f72e..0x65f748).
@@ -537,10 +565,23 @@ export class PropertyApplier {
       step = 1;
     }
 
-    const level = Int32.div(item.itemLevel - required, step);
+    const level = Int32.div(itemLevel - required, step);
 
     // Floored at 1, as the other arm is (0x65f797).
     return level < 1 ? 1 : level;
+  }
+
+  private static readonly FirstEmptyResurrectedHandler = 26;
+  private static readonly LastEmptyResurrectedHandler = 35;
+
+  /**
+   * A recorded item level. D2R floors a level below 1 to 1 and writes it back before the socket
+   * cap (0x14022bcdb), func 11 (0x140288f13) and func 19 (0x1402891b0) read it.
+   */
+  private itemLevel(item: ItemIdentity): number {
+    // Only 0 can be below 1 here: -1 means the record carries no level, which the callers report
+    // rather than guess.
+    return this._resurrected && item.itemLevel === 0 ? 1 : item.itemLevel;
   }
 
   private skillRequiredLevel(skill: number): number {

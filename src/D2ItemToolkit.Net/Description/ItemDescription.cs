@@ -295,6 +295,7 @@ namespace D2ItemToolkit
         private readonly IGameTimeProvider _time;
 
         private readonly bool _isMainStatBlock;
+        private readonly bool _resurrected;
 
         public ItemDescriptionGenerator(
             IItemStatCostTable stats,
@@ -304,8 +305,10 @@ namespace D2ItemToolkit
             ICharacterClassTable classes = null,
             IMonsterTypeTable monsters = null,
             IGameTimeProvider time = null,
-            bool isMainStatBlock = true)
+            bool isMainStatBlock = true,
+            bool resurrected = false)
         {
+            _resurrected = resurrected;
             if (stats == null) throw new ArgumentNullException("stats");
             if (strings == null) throw new ArgumentNullException("strings");
 
@@ -343,7 +346,7 @@ namespace D2ItemToolkit
 
             var lines = new List<ItemDescriptionLine>();
 
-            string undead = UndeadDamageLine.Build(_strings, _values, _isMainStatBlock);
+            string undead = UndeadDamageLine.Build(_strings, _values, _isMainStatBlock, _resurrected);
             if (!string.IsNullOrEmpty(undead))
             {
                 var undeadLine = new ItemDescriptionLine();
@@ -354,7 +357,7 @@ namespace D2ItemToolkit
                 lines.Add(undeadLine);
             }
 
-            var damage = new ItemDamageAggregate(_strings, _values);
+            var damage = new ItemDamageAggregate(_strings, _values, _resurrected);
 
             foreach (int statId in _stats.StatIdsByDescPriority)
             {
@@ -710,6 +713,225 @@ namespace D2ItemToolkit
 
         private string Format(FormatContext c)
         {
+            return _resurrected ? FormatResurrected(c) : FormatLegacy(c);
+        }
+
+        // ---- Diablo II: Resurrected (ITEMSTATDESC_Build 0x1401eba60) -------------------------
+        //
+        // D2R moved the line text into the data: 165 of its 220 described stats are func 19, and
+        // the strings are printf formats ("%+d to Strength"). Funcs 1-4, 6-10, 20, 21, 25 and 26
+        // keep their 1.14d code and reach no shipped row.
+
+        // STORM_StringPrintf(Src, 10, "%i") then a copy of at most 9 (0x1401ebb85-0x1401ebbd2).
+        private const int ResurrectedMaxNumberChars = 9;
+
+        private const int MissingSkillNameId = 5382;
+
+        public const int ResurrectedAbsoluteValue = 29;
+
+        private string FormatResurrected(FormatContext c)
+        {
+            switch (c.Func)
+            {
+                case ItemDescFunc.ValueFramesPercentString:
+                case ItemDescFunc.ValueFramesPercentStringString2:
+                    // 0x1401ec16a: the string is the format, descval ignored.
+                    return CFormat.Sprintf(c.Text, 100 * c.Value / 128);
+
+                case ItemDescFunc.ClassAllSkills:
+                    if (c.Value == 0 || _classes == null || !_classes.ClassExists(c.Layer))
+                    {
+                        return null;
+                    }
+
+                    return CFormat.Sprintf(Nz(_classes.GetAllSkillsText(c.Layer)), c.Value);
+
+                case ItemDescFunc.SkillOnEvent:
+                {
+                    int skillId = c.Layer >> _stats.SkillIdShift;
+                    int level = c.Layer & ((1 << _stats.SkillIdShift) - 1);
+                    if (_skills == null || skillId <= 0 || skillId >= _skills.RowCount)
+                    {
+                        return null;
+                    }
+
+                    // A skilldesc row with an `item proc text` replaces the whole line, chance and
+                    // level included (0x1401ec3bc); only Metamorphosis's two marks have one.
+                    var procs = _skills as ISkillItemProcSource;
+                    SkillItemProc proc = procs == null ? null : procs.GetItemProc(skillId);
+                    if (proc != null && proc.TextId != MissingSkillNameId)
+                    {
+                        return SkillDescCalc.FormatItemProc(proc, level, _strings);
+                    }
+
+                    // 1.14d's %% swallowed an argument, hence its (v, 0, lvl, name); D2R's
+                    // positional wrapper does not (0x1401ec8de).
+                    return CFormat.PositionalValueLevelName(
+                        Str(c.RawStrPos), c.Value, level, SkillName(skillId));
+                }
+
+                case ItemDescFunc.SkillAura:
+                    // sub_14060cea0 (d, s) at 0x1401ec93d.
+                    return CFormat.PositionalWrapper(c.Text, "ds", false, c.Value, SkillName(c.Layer));
+
+                case ItemDescFunc.SkillTab:
+                {
+                    // 0x1401ec29b-0x1401ec309: the tab text is now the format.
+                    int tabIndex = c.Layer & 7;
+                    int classId = c.Layer >> 3;
+                    if (_classes == null || !_classes.ClassExists(classId) || tabIndex > 2)
+                    {
+                        return null;
+                    }
+
+                    return CFormat.Sprintf(Nz(_classes.GetSkillTabText(classId, tabIndex)), c.Value)
+                           + Str(DescStringIds.Space)
+                           + Nz(_classes.GetClassOnlyText(classId));
+                }
+
+                case ItemDescFunc.RepairDurability:
+                {
+                    // 0x1401ec177-0x1401ec1fb: the 1.14d arithmetic, printed by printf.
+                    if (c.Value <= 0)
+                    {
+                        return CFormat.Sprintf(Nz(Str(DescStringIds.RepairSingleCount)), 25);
+                    }
+
+                    int seconds = 2500 / c.Value;
+                    return seconds > 30
+                        ? CFormat.PositionalWrapper(   // sub_14060cb00 (d, d) at 0x1401ec1dd
+                            Nz(Str(DescStringIds.RepairCountAndSeconds)), "dd", false, 1, (seconds + 12) / 25)
+                        : CFormat.Sprintf(Nz(Str(DescStringIds.RepairSingleCount)), 1);
+                }
+
+                case ItemDescFunc.ValueStringByTime:
+                case ItemDescFunc.ValuePercentStringByTime:
+                {
+                    // 0x1401eca9e formats the RAW packed value - the interpolation is computed and
+                    // dropped - into "%s (Increases During ...)". No shipped row can spawn these.
+                    string line = CFormat.Sprintf(c.Text, c.Value);
+                    int period = Math.Min(c.Value & 3, 3);
+                    return CFormat.Sprintf(Nz(Str(DescStringIds.PeriodOfDay[period])), line);
+                }
+
+                case ItemDescFunc.RawFormat:
+                    return WithResurrectedStr2(CFormat.Sprintf(c.Text, c.Value), c.Str2);
+
+                case ResurrectedAbsoluteValue:
+                    // 0x1401ecae0: the string was chosen by sign BEFORE this, so a negative prints
+                    // descstrneg with a positive number.
+                    return WithResurrectedStr2(
+                        CFormat.Sprintf(c.Text, c.Value < 0 ? -c.Value : c.Value), c.Str2);
+
+                case ItemDescFunc.MonsterTypeDamage:
+                {
+                    // 0x1401ecb4b: the HD text has one specifier, so the type name is dropped.
+                    if (_monsters == null)
+                    {
+                        return string.Empty;
+                    }
+
+                    int type = _monsters.MonsterTypeExists(c.Layer) ? c.Layer : 0;
+                    return CFormat.Sprintf(c.Text, c.Value, Nz(_monsters.GetMonsterTypeName(type)));
+                }
+
+                case ItemDescFunc.MonsterDamage:
+                    if (_monsters == null || !_monsters.MonsterExists(c.Layer))
+                    {
+                        return null;
+                    }
+
+                    return CFormat.Positional(
+                        c.Text,
+                        ResurrectedNumber(c.Value),
+                        StripGrammarTag(Nz(_monsters.GetMonsterName(c.Layer))));
+
+                case ItemDescFunc.Charges:
+                {
+                    int skillId = c.Layer >> _stats.SkillIdShift;
+                    int level = c.Layer & ((1 << _stats.SkillIdShift) - 1);
+                    // sub_14060e430 (d, s, d, d) at 0x1401ecc89.
+                    return CFormat.PositionalWrapper(
+                        c.Text, "dsdd", true, level, SkillName(skillId), c.Value & 0xFF, c.Value >> 8);
+                }
+
+                case ItemDescFunc.SkillClassOnly:
+                {
+                    if (c.Value == 0 || _skills == null || !_skills.SkillExists(c.Layer))
+                    {
+                        return string.Empty;
+                    }
+
+                    // `< 8` admits the Warlock (0x1401ecd82-0x1401ece29); a classless skill is an
+                    // EMPTY line rather than 1.14d's dangling "+N to Skill ".
+                    int classId = _skills.GetSkillClass(c.Layer);
+                    if (classId < 0 || classId >= 8 || _classes == null
+                        || !_classes.ClassExists(classId))
+                    {
+                        return string.Empty;
+                    }
+
+                    // sub_14060de20 (d, s, s) at 0x1401ece29.
+                    return CFormat.PositionalWrapper(
+                        c.Text, "dss", false, c.Value, SkillName(c.Layer), Nz(_classes.GetClassOnlyText(classId)));
+                }
+
+                case ItemDescFunc.Skill:
+                    if (c.Value == 0 || _skills == null || !_skills.SkillExists(c.Layer))
+                    {
+                        return string.Empty;
+                    }
+
+                    // The own-class clamp to 3 is computed into r13 (0x1401ecf6c) and never used:
+                    // the format call takes r12, the raw value (0x1401ecff3).
+                    return CFormat.PositionalWrapper(   // sub_14060cea0 (d, s) at 0x1401ed009
+                        c.Text, "ds", false, c.Value, SkillName(c.Layer));
+
+                default:
+                    return FormatLegacy(c);
+            }
+        }
+
+        // 0x1401ecb3a: func 19 and 29 append " " + descstr2 when it is set - the live path for
+        // D2R's per-level "(Based on Character Level)" rows.
+        private string WithResurrectedStr2(string text, int str2)
+        {
+            return str2 == DescStringIds.DescStr2Sentinel
+                ? text
+                : text + Str(DescStringIds.Space) + Nz(Str(str2));
+        }
+
+        private string SkillName(int skillId)
+        {
+            return (_skills == null ? null : _skills.GetSkillName(skillId))
+                   ?? Nz(Str(MissingSkillNameId));
+        }
+
+        private static string ResurrectedNumber(int value)
+        {
+            string text = value.ToString(CultureInfo.InvariantCulture);
+            return text.Length > ResurrectedMaxNumberChars
+                ? text.Substring(0, ResurrectedMaxNumberChars)
+                : text;
+        }
+
+        /// <summary>
+        /// 0x1401ecbbc-0x1401ecbe2: a monster name ending in a grammar tag such as "[ms]" has it
+        /// cut - the last ']' with a '[' three characters before it.
+        /// </summary>
+        private static string StripGrammarTag(string name)
+        {
+            int close = name.LastIndexOf(']');
+            if (close >= 3 && name[close - 3] == '[')
+            {
+                return name.Substring(close + 1);
+            }
+
+            return name;
+        }
+
+        private string FormatLegacy(FormatContext c)
+        {
             switch (c.Func)
             {
                 case ItemDescFunc.PlusValueString:
@@ -1050,9 +1272,9 @@ namespace D2ItemToolkit
             return fallback == DescValFallback.StringOnly ? text : string.Empty;
         }
 
-        private static string Number(int value)
+        private string Number(int value)
         {
-            return TblFormat.FormatNumber(value);
+            return _resurrected ? ResurrectedNumber(value) : TblFormat.FormatNumber(value);
         }
 
         private string Signed(int value)

@@ -58,6 +58,19 @@ namespace D2ItemToolkit
         public const int PoisonRange = 3621;
 
         public const int DamageToUndead = 3554;
+
+        // D2R (sub_1401ea180) names these by key; 1.14d's 3612-3623 do not exist there.
+        public const int ResurrectedPhysicalRange = 10037;
+        public const int ResurrectedFireSingle = 10026;
+        public const int ResurrectedFireRange = 10027;
+        public const int ResurrectedColdSingle = 10028;
+        public const int ResurrectedColdRange = 10029;
+        public const int ResurrectedLightningSingle = 10030;
+        public const int ResurrectedLightningRange = 10031;
+        public const int ResurrectedMagicSingle = 10032;
+        public const int ResurrectedMagicRange = 10033;
+        public const int ResurrectedPoisonSingle = 10034;
+        public const int ResurrectedPoisonRange = 10035;
     }
 
     internal sealed class DamagePair
@@ -87,23 +100,42 @@ namespace D2ItemToolkit
         private bool _physicalEmitted;
 
         private readonly IStringTable _strings;
+        private readonly bool _resurrected;
 
-        public ItemDamageAggregate(IStringTable strings, IStatValueSource values)
+        public ItemDamageAggregate(
+            IStringTable strings, IStatValueSource values, bool resurrected = false)
         {
             if (strings == null) throw new ArgumentNullException("strings");
 
             _strings = strings;
+            _resurrected = resurrected;
 
-            _fire.SingleStringId = DamageStringIds.FireSingle;
-            _fire.RangeStringId = DamageStringIds.FireRange;
-            _cold.SingleStringId = DamageStringIds.ColdSingle;
-            _cold.RangeStringId = DamageStringIds.ColdRange;
-            _lightning.SingleStringId = DamageStringIds.LightningSingle;
-            _lightning.RangeStringId = DamageStringIds.LightningRange;
-            _magic.SingleStringId = DamageStringIds.MagicSingle;
-            _magic.RangeStringId = DamageStringIds.MagicRange;
-            _poison.SingleStringId = DamageStringIds.PoisonSingle;
-            _poison.RangeStringId = DamageStringIds.PoisonRange;
+            if (resurrected)
+            {
+                _fire.SingleStringId = DamageStringIds.ResurrectedFireSingle;
+                _fire.RangeStringId = DamageStringIds.ResurrectedFireRange;
+                _cold.SingleStringId = DamageStringIds.ResurrectedColdSingle;
+                _cold.RangeStringId = DamageStringIds.ResurrectedColdRange;
+                _lightning.SingleStringId = DamageStringIds.ResurrectedLightningSingle;
+                _lightning.RangeStringId = DamageStringIds.ResurrectedLightningRange;
+                _magic.SingleStringId = DamageStringIds.ResurrectedMagicSingle;
+                _magic.RangeStringId = DamageStringIds.ResurrectedMagicRange;
+                _poison.SingleStringId = DamageStringIds.ResurrectedPoisonSingle;
+                _poison.RangeStringId = DamageStringIds.ResurrectedPoisonRange;
+            }
+            else
+            {
+                _fire.SingleStringId = DamageStringIds.FireSingle;
+                _fire.RangeStringId = DamageStringIds.FireRange;
+                _cold.SingleStringId = DamageStringIds.ColdSingle;
+                _cold.RangeStringId = DamageStringIds.ColdRange;
+                _lightning.SingleStringId = DamageStringIds.LightningSingle;
+                _lightning.RangeStringId = DamageStringIds.LightningRange;
+                _magic.SingleStringId = DamageStringIds.MagicSingle;
+                _magic.RangeStringId = DamageStringIds.MagicRange;
+                _poison.SingleStringId = DamageStringIds.PoisonSingle;
+                _poison.RangeStringId = DamageStringIds.PoisonRange;
+            }
 
             if (values == null)
             {
@@ -248,6 +280,16 @@ namespace D2ItemToolkit
                         return false;
                     }
 
+                    // 0x1401ea6f9: D2R formats the MAX (stat 17) into "%+d%% Enhanced Damage"; a
+                    // min below max would name a key neither string table has.
+                    if (_resurrected)
+                    {
+                        text = _enhanced.Min < _enhanced.Max
+                            ? Format(-1, _enhanced.Min, _enhanced.Max)
+                            : Format(DamageStringIds.EnhancedDamage, _enhanced.Max);
+                        return true;
+                    }
+
                     text = Str(DescStringIds.Plus)
                            + TblFormat.FormatNumber(_enhanced.Min)
                            + Str(DescStringIds.Percent)
@@ -326,7 +368,10 @@ namespace D2ItemToolkit
                 return false;
             }
 
-            text = Format(DamageStringIds.PhysicalRange, _physical.Min, _physical.Max);
+            text = Format(
+                _resurrected ? DamageStringIds.ResurrectedPhysicalRange : DamageStringIds.PhysicalRange,
+                _physical.Min,
+                _physical.Max);
             _physicalEmitted = true;
             return true;
         }
@@ -389,8 +434,23 @@ namespace D2ItemToolkit
             return pair.BothPresent;
         }
 
+        private const string EnhancedDamageRangeKey = "strModEnhancedDamageRange";
+
         private string Format(int stringId, params object[] args)
         {
+            if (_resurrected)
+            {
+                // -1 is the key strModEnhancedDamageRange, which neither D2R table holds, so the
+                // game formats the missing-string text.
+                StringTable table = _strings as StringTable;
+                string format = stringId >= 0
+                    ? Str(stringId)
+                    : (table == null ? string.Empty : table.GetByKey(EnhancedDamageRangeKey));
+                // 1.14d's strings carry their own newline; D2R's do not, and every emitted
+                // aggregate line gets the `newline` key appended (0x1401ea91e).
+                return CFormat.Sprintf(format, args) + Str(DescStringIds.Newline);
+            }
+
             return TblFormat.FormatBounded(Str(stringId), TblFormat.DefaultMaxLength, args);
         }
 
@@ -411,7 +471,8 @@ namespace D2ItemToolkit
 
         public const int InherentPercent = 50;
 
-        public static string Build(IStringTable strings, IStatValueSource values, bool isMainStatBlock)
+        public static string Build(
+            IStringTable strings, IStatValueSource values, bool isMainStatBlock, bool resurrected = false)
         {
             if (strings == null) throw new ArgumentNullException("strings");
 
@@ -428,6 +489,13 @@ namespace D2ItemToolkit
             if (values.GetItemStatValue(DamageStatIds.UndeadDamagePercent) != 0)
             {
                 return null;
+            }
+
+            // 0x1401e9625: "%+d%% Damage to Undead" as a format.
+            if (resurrected)
+            {
+                return CFormat.Sprintf(Nz(strings.GetByIndex(DamageStringIds.DamageToUndead)), InherentPercent)
+                       + Nz(strings.GetByIndex(DescStringIds.Newline));
             }
 
             return Nz(strings.GetByIndex(DescStringIds.Plus))

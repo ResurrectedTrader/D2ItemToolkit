@@ -522,6 +522,8 @@ namespace D2ItemToolkit.Tests
             // — foreach inserts a downcast — and throws InvalidCastException for any
             // implementation that does not happen to use our class. An empty list would hide that,
             // so it carries a real skill.
+            public int LastUsedSkill { get { return -1; } }
+
             public IReadOnlyList<IUnitSkill> Skills
             {
                 get { return new IUnitSkill[] { new ComputedSkill(117, 20) }; }
@@ -621,6 +623,7 @@ namespace D2ItemToolkit.Tests
 
             public int X { get { return 0; } }
             public IReadOnlyList<IUnitSkill> Skills { get { return new IUnitSkill[0]; } }
+            public int LastUsedSkill { get { return -1; } }
         }
 
         [Fact]

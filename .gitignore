@@ -15,6 +15,7 @@ dist/
 # Generated from data/ by `npm run generate:data`, which the `prepare` script runs on install and
 # before packing. Checking it in would duplicate 2.6 MB of tables that already live in data/.
 src/D2ItemToolkit.Ts/src/Data/EmbeddedDataBlob.ts
+src/D2ItemToolkit.Ts/src/Data/EmbeddedResurrectedDataBlob.ts
 *.tsbuildinfo
 
 # Written by tests/corpus/adversarial.compare.test.ts on every run so a failing run is

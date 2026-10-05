@@ -331,6 +331,17 @@ describe('D2DataFiles', () => {
       expect(names).toContain(required);
     }
 
+    // The D2R trees, under the same dotted names the C# assembly resources carry.
+    for (const required of [
+      'd2r.excel.states.txt',
+      'd2r.excel.base.propertygroups.txt',
+      'd2r.strings.item-names.json',
+      'd2r.strings-legacy.item-names.json',
+      'd2r.global.animdata.d2',
+    ]) {
+      expect(names).toContain(required);
+    }
+
     // These pin the extraction: they are the counts only Patch_D2.mpq's tables produce.
     expect(data.itemStatCost.rowCount).toBe(359);
     expect(data.skills.rowCount).toBe(357);

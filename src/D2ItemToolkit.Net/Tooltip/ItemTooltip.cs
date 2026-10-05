@@ -91,6 +91,12 @@ namespace D2ItemToolkit
         /// what each gem or rune is actually contributing. Never produced otherwise.
         /// </summary>
         SocketContribution = 28,
+
+        /// <summary>
+        /// D2R only: "Belt Size: %+d Slots", appended between Durability and the socket-filler
+        /// description on both the generic (0x1401d57f6) and the set path.
+        /// </summary>
+        BeltSize = 29,
     }
 
     public static class ItemTooltipColor
@@ -104,6 +110,12 @@ namespace D2ItemToolkit
         public const int Crafted = 8;
         public const int Rare = 9;
         public const int Tempered = 10;
+
+        /// <summary>D2R: a rune's name, which beats even the broken red (0x1401d7877).</summary>
+        public const int ResurrectedRune = 26;
+
+        /// <summary>D2R: an items.txt `EventItem` row's name (0x1401d7863).</summary>
+        public const int ResurrectedEventItem = 28;
 
         public const int MarkerStringId = 3994;
 
@@ -227,6 +239,21 @@ namespace D2ItemToolkit
         public bool IsShieldType;
 
         public int ShopMode;
+
+        /// <summary>Selects D2R's ITEMS_GetFullDescription 0x1401d5200 over LoadItemDesc.</summary>
+        public bool IsResurrected;
+
+        /// <summary>D2R: items.txt `EventItem` (+342).</summary>
+        public bool IsEventItem;
+
+        /// <summary>D2R: IsOfType(item, rune).</summary>
+        public bool IsRune;
+
+        /// <summary>
+        /// The tooltip's unit is a player. D2R's set path reddens the class restriction only for a
+        /// player of another class, where the generic path reddens any mismatch.
+        /// </summary>
+        public bool ViewerIsPlayer;
     }
 
     internal interface IItemTooltipSections
@@ -272,6 +299,34 @@ namespace D2ItemToolkit
             ItemTooltipSection.RuneLetters,
             ItemTooltipSection.ItemName,
             ItemTooltipSection.TransactionCost,
+        };
+
+        /// <summary>
+        /// ITEMS_GetFullDescription 0x1401d6069-0x1401d6538. LoadItemDesc's order with three
+        /// changes: no quest-usage line (box and bkd now speak through spelldesc), no cost tail, and
+        /// the belt-size line after Durability.
+        /// </summary>
+        private static readonly ItemTooltipSection[] ResurrectedAppendOrder =
+        {
+            ItemTooltipSection.EtherealSocketed,
+            ItemTooltipSection.Modifiers,
+            ItemTooltipSection.Unidentified,
+            ItemTooltipSection.AttackSpeed,
+            ItemTooltipSection.RequiredLevel,
+            ItemTooltipSection.RequiredStrength,
+            ItemTooltipSection.RequiredDexterity,
+            ItemTooltipSection.ClassRestriction,
+            ItemTooltipSection.Durability,
+            ItemTooltipSection.BeltSize,
+            ItemTooltipSection.SocketFillerDescription,
+            ItemTooltipSection.CharmDescription,
+            ItemTooltipSection.QuantityAndSpellDescription,
+            ItemTooltipSection.WeaponDamage,
+            ItemTooltipSection.SmiteOrKickDamage,
+            ItemTooltipSection.BlockChance,
+            ItemTooltipSection.ArmorClass,
+            ItemTooltipSection.RuneLetters,
+            ItemTooltipSection.ItemName,
         };
 
         /// <summary>
@@ -403,6 +458,23 @@ namespace D2ItemToolkit
             ItemTooltipSection.ItemName,
         };
 
+        /// <summary>UI_DrawSetItemDescBox's pSourceStr: the same, with the belt line after Durability.</summary>
+        private static readonly ItemTooltipSection[] ResurrectedSetGenericAppendOrder =
+        {
+            ItemTooltipSection.RequiredLevel,
+            ItemTooltipSection.RequiredStrength,
+            ItemTooltipSection.RequiredDexterity,
+            ItemTooltipSection.ClassRestriction,
+            ItemTooltipSection.Durability,
+            ItemTooltipSection.BeltSize,
+            ItemTooltipSection.AttackSpeed,
+            ItemTooltipSection.WeaponDamage,
+            ItemTooltipSection.SmiteOrKickDamage,
+            ItemTooltipSection.BlockChance,
+            ItemTooltipSection.ArmorClass,
+            ItemTooltipSection.ItemName,
+        };
+
         /// <summary>
         /// ITEM_BuildSetItemTooltip 0x48d1d0 — the tooltip for an identified set item. LoadItemDesc
         /// diverts to it at 0x48e432 and returns at 0x48e43d, so the generic path is never built
@@ -490,9 +562,11 @@ namespace D2ItemToolkit
             // the ethereal-or-socketed test INV_FormatEtherealSocketedText itself makes, so an
             // ethereal set item that is not socketed gets no "Cannot Be Repaired" line.
             int sharedBufferStart = appended.Count;
+            int sharedBytes = 0;
 
             if ((context.Flags & ItemTooltipFlags.Socketed) != 0)
             {
+                sharedBytes = CFormat.Utf8Length(_sections.GetSection(ItemTooltipSection.EtherealSocketed));
                 carriedColor = AppendSetSection(
                     appended, _sections.GetSection(ItemTooltipSection.EtherealSocketed),
                     ItemTooltipSection.EtherealSocketed, ItemTooltipColor.Magic, carriedColor);
@@ -502,7 +576,9 @@ namespace D2ItemToolkit
 
             string suppliedModifiers = _sections.GetSection(ItemTooltipSection.Modifiers);
             int afterModifiers = string.IsNullOrEmpty(suppliedModifiers)
-                ? AppendModifiers(appended, packedStats)
+                ? AppendModifiers(
+                    appended, packedStats,
+                    context.IsResurrected ? Math.Max(0, ResurrectedModifierBytes - sharedBytes) : int.MaxValue)
                 : AppendSuppliedModifiers(appended, suppliedModifiers);
 
             if (appended.Count != modifiersStart)
@@ -519,7 +595,8 @@ namespace D2ItemToolkit
             }
 
             // --- var_2138, appended whole at 0x48d9fe ----------------------------------------
-            foreach (ItemTooltipSection section in SetGenericAppendOrder)
+            foreach (ItemTooltipSection section in
+                context.IsResurrected ? ResurrectedSetGenericAppendOrder : SetGenericAppendOrder)
             {
                 if (!context.IsWeaponOrArmorType && IsWeaponOrArmorSection(section))
                 {
@@ -551,6 +628,13 @@ namespace D2ItemToolkit
                         ? ItemTooltipColor.Red
                         : ItemTooltipColor.Set)
                     : ResolveSectionColor(section, context);
+
+                // UI_DrawSetItemDescBox: the class line is red only for a PLAYER of another class.
+                if (context.IsResurrected && section == ItemTooltipSection.ClassRestriction
+                    && !context.ViewerIsPlayer)
+                {
+                    color = ItemTooltipColor.White;
+                }
 
                 int running = color;
                 bool firstOfSection = true;
@@ -586,7 +670,7 @@ namespace D2ItemToolkit
             }
 
             // --- the inlined cost tail, 0x48da03-0x48db00 ------------------------------------
-            if (context.ShopMode >= 1 && context.ShopMode <= 9)
+            if (!context.IsResurrected && context.ShopMode >= 1 && context.ShopMode <= 9)
             {
                 string cost = _sections.GetSection(ItemTooltipSection.TransactionCost);
 
@@ -697,7 +781,8 @@ namespace D2ItemToolkit
 
             int carriedColor = ItemTooltipColor.White;
 
-            foreach (ItemTooltipSection section in AppendOrder)
+            foreach (ItemTooltipSection section in
+                context.IsResurrected ? ResurrectedAppendOrder : AppendOrder)
             {
                 if (section == ItemTooltipSection.TransactionCost
                     && (context.ShopMode < 1 || context.ShopMode > 9))
@@ -721,7 +806,9 @@ namespace D2ItemToolkit
 
                         int before = appended.Count;
                         int after = string.IsNullOrEmpty(supplied)
-                            ? AppendModifiers(appended, stats)
+                            ? AppendModifiers(
+                                appended, stats,
+                                context.IsResurrected ? ResurrectedModifierBytes : int.MaxValue)
                             : AppendSuppliedModifiers(appended, supplied);
 
                         if (appended.Count != before)
@@ -1207,8 +1294,8 @@ namespace D2ItemToolkit
                 return part;
             }
 
-            // The game pads a magic or rare name with a trailing space, so a separator of our own
-            // reads as a double space on most items.
+            // 1.14d pads a magic or rare name with a trailing space, so a separator of our own would
+            // read as a double space there; D2R pads neither, and gets the separator.
             string terminator = _sections.LineTerminator;
             bool padded = (!string.IsNullOrEmpty(terminator)
                     && part.EndsWith(terminator, StringComparison.Ordinal)
@@ -1322,19 +1409,50 @@ namespace D2ItemToolkit
             return lines;
         }
 
+        /// <summary>
+        /// D2R's byte budgets for the modifier block, in UTF-8 bytes of APPEND order. The walk
+        /// (sub_1401E8BE0, 0x1401e91f6-0x1401e9243) strlcats each line into a 1024 buffer, so the
+        /// line that crosses 1023 is cut at a byte and every later one dropped. The generic path then
+        /// wraps the block in a 4-byte colour code and keeps 1023 again
+        /// (D2RGFX_D2R_Text_ApplyColorCode 0x14008c9f0, called at 0x1401d60b4), so 1019 survive.
+        /// The cut loses the trailing newline, and MergeUnterminatedRuns joins the next buffer onto
+        /// that row. Reached by a socketed Arm of King Leoric in ruRU. The set path appends the
+        /// modifiers to the buffer already holding the socket text (UI_DrawSetItemDescBox 0x1401d49ad /
+        /// 0x1401d49fb) and wraps that whole buffer (0x1401d4da7), so the two share the 1019.
+        /// </summary>
+        public const int ResurrectedModifierBytes = 1019;
+
         private int AppendModifiers(
-            List<ItemTooltipLine> lines, IEnumerable<KeyValuePair<int, int>> packedStats)
+            List<ItemTooltipLine> lines, IEnumerable<KeyValuePair<int, int>> packedStats,
+            int byteBudget = int.MaxValue)
         {
             string terminator = _sections.LineTerminator ?? string.Empty;
 
             int running = ItemTooltipColor.Magic;
             bool firstOfSection = true;
+            int spent = 0;
 
             foreach (ItemDescriptionLine modifier in _modifiers.Describe(packedStats))
             {
                 string text = modifier.PreJoined
                     ? modifier.Text ?? string.Empty
                     : (modifier.Text ?? string.Empty) + terminator;
+
+                if (byteBudget != int.MaxValue)
+                {
+                    if (spent >= byteBudget)
+                    {
+                        break;
+                    }
+
+                    int bytes = CFormat.Utf8Length(text);
+                    if (spent + bytes > byteBudget)
+                    {
+                        text = CFormat.Bounded(text, byteBudget - spent + 1);
+                    }
+
+                    spent += bytes;
+                }
 
                 bool firstPart = true;
 
@@ -1482,6 +1600,23 @@ namespace D2ItemToolkit
                         (context.Flags & (ItemTooltipFlags.Socketed | ItemTooltipFlags.Ethereal)) != 0;
                     color = socketedOrEthereal ? ItemTooltipColor.SocketedOrEthereal : ItemTooltipColor.White;
                     break;
+            }
+
+            // D2RGFX_GetStringColorFromItemAndRarity 0x1401d77a0: no shop arm and no code list.
+            // Broken skips the EventItem test (0x1401d7855), and a rune overrides everything,
+            // broken included (0x1401d7877).
+            if (context.IsResurrected)
+            {
+                if ((context.Flags & ItemTooltipFlags.Broken) != 0)
+                {
+                    color = ItemTooltipColor.Red;
+                }
+                else if (context.IsEventItem)
+                {
+                    color = ItemTooltipColor.ResurrectedEventItem;
+                }
+
+                return context.IsRune ? ItemTooltipColor.ResurrectedRune : color;
             }
 
             if (context.UnidentifiedInShop)

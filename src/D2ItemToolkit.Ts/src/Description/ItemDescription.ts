@@ -4,6 +4,8 @@ import {
   UndeadDamageLine,
 } from '../Tooltip/ItemDamageLines.js';
 import { ItemStatReader } from '../Stats/ItemStatReader.js';
+import { CFormat } from './CFormat.js';
+import { isSkillItemProcSource, SkillDescCalc } from './SkillDescCalc.js';
 import {
   DescStringIds,
   Int32,
@@ -173,6 +175,7 @@ export class ItemDescriptionGenerator {
   private readonly time: IGameTimeProvider | null;
 
   private readonly isMainStatBlock: boolean;
+  private readonly resurrected: boolean;
 
   constructor(
     stats: IItemStatCostTable | null | undefined,
@@ -183,11 +186,13 @@ export class ItemDescriptionGenerator {
     monsters: IMonsterTypeTable | null = null,
     time: IGameTimeProvider | null = null,
     isMainStatBlock = true,
+    resurrected = false,
   ) {
     if (stats === null || stats === undefined) throw new Error('stats');
     if (strings === null || strings === undefined) throw new Error('strings');
 
     this.isMainStatBlock = isMainStatBlock;
+    this.resurrected = resurrected;
 
     this.stats = stats;
     this.strings = strings;
@@ -220,7 +225,12 @@ export class ItemDescriptionGenerator {
 
     const lines: ItemDescriptionLine[] = [];
 
-    const undead = UndeadDamageLine.build(this.strings, this.values, this.isMainStatBlock);
+    const undead = UndeadDamageLine.build(
+      this.strings,
+      this.values,
+      this.isMainStatBlock,
+      this.resurrected,
+    );
     if (undead !== null && undead.length !== 0) {
       const undeadLine = new ItemDescriptionLine();
       undeadLine.text = undead;
@@ -230,7 +240,7 @@ export class ItemDescriptionGenerator {
       lines.push(undeadLine);
     }
 
-    const damage = new ItemDamageAggregate(this.strings, this.values);
+    const damage = new ItemDamageAggregate(this.strings, this.values, this.resurrected);
 
     for (const statId of this.stats.statIdsByDescPriority) {
       const entries = byStat.get(statId);
@@ -532,6 +542,237 @@ export class ItemDescriptionGenerator {
   }
 
   private format(c: FormatContext): string | null {
+    return this.resurrected ? this.formatResurrected(c) : this.formatLegacy(c);
+  }
+
+  // ---- Diablo II: Resurrected (ITEMSTATDESC_Build 0x1401eba60) -------------------------------
+  //
+  // D2R moved the line text into the data: 165 of its 220 described stats are func 19, and the
+  // strings are printf formats ("%+d to Strength"). Funcs 1-4, 6-10, 20, 21, 25 and 26 keep their
+  // 1.14d code and reach no shipped row.
+
+  // STORM_StringPrintf(Src, 10, "%i") then a copy of at most 9 (0x1401ebb85-0x1401ebbd2).
+  private static readonly ResurrectedMaxNumberChars = 9;
+
+  private static readonly MissingSkillNameId = 5382;
+
+  static readonly ResurrectedAbsoluteValue = 29;
+
+  private formatResurrected(c: FormatContext): string | null {
+    const nz = ItemDescriptionGenerator.nz;
+
+    switch (c.func) {
+      case ItemDescFunc.ValueFramesPercentString:
+      case ItemDescFunc.ValueFramesPercentStringString2:
+        // 0x1401ec16a: the string is the format, descval ignored.
+        return CFormat.sprintf(c.text, Int32.div(Int32.mul(100, c.value), 128));
+
+      case ItemDescFunc.ClassAllSkills:
+        if (c.value === 0 || this.classes === null || !this.classes.classExists(c.layer)) {
+          return null;
+        }
+
+        return CFormat.sprintf(nz(this.classes.getAllSkillsText(c.layer)), c.value);
+
+      case ItemDescFunc.SkillOnEvent: {
+        const skillId = c.layer >> this.stats.skillIdShift;
+        const level = c.layer & ((1 << this.stats.skillIdShift) - 1);
+        if (this.skills === null || skillId <= 0 || skillId >= this.skills.rowCount) {
+          return null;
+        }
+
+        // A skilldesc row with an `item proc text` replaces the whole line, chance and level
+        // included (0x1401ec3bc); only Metamorphosis's two marks have one.
+        const proc = isSkillItemProcSource(this.skills) ? this.skills.getItemProc(skillId) : null;
+        if (proc !== null && proc.textId !== ItemDescriptionGenerator.MissingSkillNameId) {
+          return SkillDescCalc.formatItemProc(proc, level, this.strings);
+        }
+
+        // 1.14d's %% swallowed an argument, hence its (v, 0, lvl, name); D2R's positional wrapper
+        // does not (0x1401ec8de).
+        return CFormat.positionalValueLevelName(
+          this.str(c.rawStrPos),
+          c.value,
+          level,
+          this.skillName(skillId),
+        );
+      }
+
+      case ItemDescFunc.SkillAura:
+        // sub_14060cea0 (d, s) at 0x1401ec93d.
+        return CFormat.positionalWrapper(c.text, 'ds', false, c.value, this.skillName(c.layer));
+
+      case ItemDescFunc.SkillTab: {
+        // 0x1401ec29b-0x1401ec309: the tab text is now the format.
+        const tabIndex = c.layer & 7;
+        const classId = c.layer >> 3;
+        if (this.classes === null || !this.classes.classExists(classId) || tabIndex > 2) {
+          return null;
+        }
+
+        return (
+          CFormat.sprintf(nz(this.classes.getSkillTabText(classId, tabIndex)), c.value) +
+          nz(this.str(DescStringIds.Space)) +
+          nz(this.classes.getClassOnlyText(classId))
+        );
+      }
+
+      case ItemDescFunc.RepairDurability: {
+        // 0x1401ec177-0x1401ec1fb: the 1.14d arithmetic, printed by printf.
+        if (c.value <= 0) {
+          return CFormat.sprintf(nz(this.str(DescStringIds.RepairSingleCount)), 25);
+        }
+
+        const seconds = Int32.div(2500, c.value);
+        return seconds > 30
+          ? CFormat.positionalWrapper(
+              // sub_14060cb00 (d, d) at 0x1401ec1dd
+              nz(this.str(DescStringIds.RepairCountAndSeconds)),
+              'dd',
+              false,
+              1,
+              Int32.div(seconds + 12, 25),
+            )
+          : CFormat.sprintf(nz(this.str(DescStringIds.RepairSingleCount)), 1);
+      }
+
+      case ItemDescFunc.ValueStringByTime:
+      case ItemDescFunc.ValuePercentStringByTime: {
+        // 0x1401eca9e formats the RAW packed value - the interpolation is computed and dropped -
+        // into "%s (Increases During ...)". No shipped row can spawn these.
+        const line = CFormat.sprintf(c.text, c.value);
+        const period = Math.min(c.value & 3, 3);
+        return CFormat.sprintf(nz(this.str(PeriodOfDay[period] ?? 0)), line);
+      }
+
+      case ItemDescFunc.RawFormat:
+        return this.withResurrectedStr2(CFormat.sprintf(c.text, c.value), c.str2);
+
+      case ItemDescriptionGenerator.ResurrectedAbsoluteValue:
+        // 0x1401ecae0: the string was chosen by sign BEFORE this, so a negative prints descstrneg
+        // with a positive number.
+        return this.withResurrectedStr2(
+          CFormat.sprintf(c.text, c.value < 0 ? -c.value | 0 : c.value),
+          c.str2,
+        );
+
+      case ItemDescFunc.MonsterTypeDamage: {
+        // 0x1401ecb4b: the HD text has one specifier, so the type name is dropped.
+        if (this.monsters === null) {
+          return '';
+        }
+
+        const type = this.monsters.monsterTypeExists(c.layer) ? c.layer : 0;
+        return CFormat.sprintf(c.text, c.value, nz(this.monsters.getMonsterTypeName(type)));
+      }
+
+      case ItemDescFunc.MonsterDamage:
+        if (this.monsters === null || !this.monsters.monsterExists(c.layer)) {
+          return null;
+        }
+
+        return CFormat.positional(
+          c.text,
+          ItemDescriptionGenerator.resurrectedNumber(c.value),
+          ItemDescriptionGenerator.stripGrammarTag(nz(this.monsters.getMonsterName(c.layer))),
+        );
+
+      case ItemDescFunc.Charges: {
+        const skillId = c.layer >> this.stats.skillIdShift;
+        const level = c.layer & ((1 << this.stats.skillIdShift) - 1);
+        // sub_14060e430 (d, s, d, d) at 0x1401ecc89.
+        return CFormat.positionalWrapper(
+          c.text,
+          'dsdd',
+          true,
+          level,
+          this.skillName(skillId),
+          c.value & 0xff,
+          c.value >> 8,
+        );
+      }
+
+      case ItemDescFunc.SkillClassOnly: {
+        if (c.value === 0 || this.skills === null || !this.skills.skillExists(c.layer)) {
+          return '';
+        }
+
+        // `< 8` admits the Warlock (0x1401ecd82-0x1401ece29); a classless skill is an EMPTY line
+        // rather than 1.14d's dangling "+N to Skill ".
+        const classId = this.skills.getSkillClass(c.layer);
+        if (
+          classId < 0 ||
+          classId >= 8 ||
+          this.classes === null ||
+          !this.classes.classExists(classId)
+        ) {
+          return '';
+        }
+
+        // sub_14060de20 (d, s, s) at 0x1401ece29.
+        return CFormat.positionalWrapper(
+          c.text,
+          'dss',
+          false,
+          c.value,
+          this.skillName(c.layer),
+          nz(this.classes.getClassOnlyText(classId)),
+        );
+      }
+
+      case ItemDescFunc.Skill:
+        if (c.value === 0 || this.skills === null || !this.skills.skillExists(c.layer)) {
+          return '';
+        }
+
+        // The own-class clamp to 3 is computed into r13 (0x1401ecf6c) and never used: the format
+        // call takes r12, the raw value (0x1401ecff3).
+        // sub_14060cea0 (d, s) at 0x1401ed009.
+        return CFormat.positionalWrapper(c.text, 'ds', false, c.value, this.skillName(c.layer));
+
+      default:
+        return this.formatLegacy(c);
+    }
+  }
+
+  // 0x1401ecb3a: func 19 and 29 append " " + descstr2 when it is set - the live path for D2R's
+  // per-level "(Based on Character Level)" rows.
+  private withResurrectedStr2(text: string, str2: number): string {
+    return str2 === DescStringIds.DescStr2Sentinel
+      ? text
+      : text +
+          ItemDescriptionGenerator.nz(this.str(DescStringIds.Space)) +
+          ItemDescriptionGenerator.nz(this.str(str2));
+  }
+
+  private skillName(skillId: number): string {
+    return (
+      (this.skills === null ? null : this.skills.getSkillName(skillId)) ??
+      ItemDescriptionGenerator.nz(this.str(ItemDescriptionGenerator.MissingSkillNameId))
+    );
+  }
+
+  private static resurrectedNumber(value: number): string {
+    const text = String(value);
+    return text.length > ItemDescriptionGenerator.ResurrectedMaxNumberChars
+      ? text.substring(0, ItemDescriptionGenerator.ResurrectedMaxNumberChars)
+      : text;
+  }
+
+  /**
+   * 0x1401ecbbc-0x1401ecbe2: a monster name ending in a grammar tag such as "[ms]" has it cut -
+   * the last ']' with a '[' three characters before it.
+   */
+  private static stripGrammarTag(name: string): string {
+    const close = name.lastIndexOf(']');
+    if (close >= 3 && name.charAt(close - 3) === '[') {
+      return name.substring(close + 1);
+    }
+
+    return name;
+  }
+
+  private formatLegacy(c: FormatContext): string | null {
     switch (c.func) {
       case ItemDescFunc.PlusValueString:
       case ItemDescFunc.PlusValueStringString2:
@@ -547,7 +788,7 @@ export class ItemDescriptionGenerator {
 
       case ItemDescFunc.StaleNegated25:
       case ItemDescFunc.StaleNegated26: {
-        const staleDigits = ItemDescriptionGenerator.number(c.value);
+        const staleDigits = this.number(c.value);
         // `neg` is int32: negating int.MinValue yields int.MinValue, not a positive.
         c.value = -c.value | 0;
         return this.place(
@@ -563,19 +804,14 @@ export class ItemDescriptionGenerator {
       case ItemDescFunc.ValuePercentStringString2:
         return this.place(
           c.descVal,
-          ItemDescriptionGenerator.number(c.value) + this.percent(),
+          this.number(c.value) + this.percent(),
           c.text,
           DescValFallback.StringOnly,
         );
 
       case ItemDescFunc.ValueString:
       case ItemDescFunc.ValueStringString2:
-        return this.place(
-          c.descVal,
-          ItemDescriptionGenerator.number(c.value),
-          c.text,
-          DescValFallback.StringOnly,
-        );
+        return this.place(c.descVal, this.number(c.value), c.text, DescValFallback.StringOnly);
 
       case ItemDescFunc.PlusValuePercentString:
       case ItemDescFunc.PlusValuePercentStringString2:
@@ -590,7 +826,7 @@ export class ItemDescriptionGenerator {
       case ItemDescFunc.ValueFramesPercentStringString2:
         return this.place(
           c.descVal,
-          ItemDescriptionGenerator.number(Int32.div(Int32.mul(100, c.value), 128)) + this.percent(),
+          this.number(Int32.div(Int32.mul(100, c.value), 128)) + this.percent(),
           c.text,
           DescValFallback.StringOnly,
         );
@@ -752,7 +988,7 @@ export class ItemDescriptionGenerator {
     let builder = '';
     builder += ItemDescriptionGenerator.nz(this.str(DescStringIds.Level));
     builder += space;
-    builder += ItemDescriptionGenerator.number(level);
+    builder += this.number(level);
     builder += space;
     builder += skillName;
     builder += space;
@@ -834,11 +1070,9 @@ export class ItemDescriptionGenerator {
 
     let num: string;
     if (adjusted >= 0) {
-      num =
-        ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) +
-        ItemDescriptionGenerator.number(adjusted);
+      num = ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) + this.number(adjusted);
     } else if (c.value < 0) {
-      num = ItemDescriptionGenerator.number(adjusted);
+      num = this.number(adjusted);
     } else {
       num = '';
     }
@@ -881,7 +1115,7 @@ export class ItemDescriptionGenerator {
 
     const head = this.place(
       c.descVal,
-      ItemDescriptionGenerator.number(c.value) + this.percent(),
+      this.number(c.value) + this.percent(),
       c.text,
       DescValFallback.StringOnly,
     );
@@ -918,22 +1152,22 @@ export class ItemDescriptionGenerator {
     return fallback === DescValFallback.StringOnly ? text : '';
   }
 
-  private static number(value: number): string {
-    return TblFormat.formatNumber(value);
+  private number(value: number): string {
+    return this.resurrected
+      ? ItemDescriptionGenerator.resurrectedNumber(value)
+      : TblFormat.formatNumber(value);
   }
 
   private signed(value: number): string {
     return value > 0
-      ? ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) +
-          ItemDescriptionGenerator.number(value)
-      : ItemDescriptionGenerator.number(value);
+      ? ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) + this.number(value)
+      : this.number(value);
   }
 
   private signedIncludingZero(value: number): string {
     return value >= 0
-      ? ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) +
-          ItemDescriptionGenerator.number(value)
-      : ItemDescriptionGenerator.number(value);
+      ? ItemDescriptionGenerator.nz(this.str(DescStringIds.Plus)) + this.number(value)
+      : this.number(value);
   }
 
   private percent(): string {

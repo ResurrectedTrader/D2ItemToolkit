@@ -6,6 +6,7 @@ import type { D2DataFiles, TxtSkillTable } from '../Tables/TxtDataProviders.js';
 import type { TxtFile } from '../Data/TxtFile.js';
 import { ItemQualityNo } from './ItemNameBuilder.js';
 import { Int32 } from '../Types.js';
+import { WeaponMastery } from './WeaponMastery.js';
 
 /**
  * ITEM_CalcRequiredLevel 0x62b5b0. Everything it reads is either in the record or in the excel
@@ -21,14 +22,19 @@ export class RequiredLevelCalculator {
   private static readonly OffClassSkillPenalty = 6;
   private static readonly LastPlayerClass = 6;
 
+  // ITEMS_GetRequiredLevel 0x1402288a5 admits the Warlock.
+  private static readonly ResurrectedLastPlayerClass = 7;
+
   private readonly _data: D2DataFiles;
   private readonly _items: ItemTable;
   private readonly _affixes: MagicAffixTable;
+  private readonly _mastery: WeaponMastery | null;
 
   constructor(data: D2DataFiles, items: ItemTable) {
     this._data = data;
     this._items = items;
     this._affixes = new MagicAffixTable(data);
+    this._mastery = data.isResurrected ? new WeaponMastery(data, items) : null;
   }
 
   /**
@@ -80,7 +86,11 @@ export class RequiredLevelCalculator {
       result + RequiredLevelCalculator.stat(stats, RequiredLevelCalculator.StatLevelRequirement),
     );
 
-    return result <= 0 ? 0 : result;
+    result = result <= 0 ? 0 : result;
+
+    // Inside the recursion, so a filler's level has had its own 209 applied before the host takes
+    // the max and applies the host's (0x14022875b).
+    return this._mastery === null ? result : this._mastery.applyLevelPercent(item, viewer, result);
   }
 
   private static fillers(
@@ -171,7 +181,8 @@ export class RequiredLevelCalculator {
   }
 
   // 0x62b859. A classic-format unique shows no level requirement to a viewer without the
-  // expansion flag (0x2000000 tested at 0x62b877).
+  // expansion flag (0x2000000 tested at 0x62b877). D2R asks the viewer's unit version instead
+  // (0x1402283f1, `nVersion != 1`), which a record states through the same expansion flag.
   private unique(item: ItemIdentity, viewer: ItemViewer | null): number {
     if (item.fileIndex < 0) {
       return 0;
@@ -230,7 +241,10 @@ export class RequiredLevelCalculator {
           viewer !== null &&
           viewer.isPlayer &&
           skillClass >= 0 &&
-          skillClass <= RequiredLevelCalculator.LastPlayerClass &&
+          skillClass <=
+            (this._data.isResurrected
+              ? RequiredLevelCalculator.ResurrectedLastPlayerClass
+              : RequiredLevelCalculator.LastPlayerClass) &&
           viewer.classId === skillClass;
 
         if (!ownClass) {

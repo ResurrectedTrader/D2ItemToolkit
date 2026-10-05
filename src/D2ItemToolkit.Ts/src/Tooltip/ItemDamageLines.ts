@@ -1,4 +1,6 @@
+import { CFormat } from '../Description/CFormat.js';
 import { TblFormat } from '../Description/ItemDescription.js';
+import { StringTable } from '../Data/StringTable.js';
 import { DescStringIds, Int32, type IStatValueSource, type IStringTable } from '../Types.js';
 
 // Mirrors SKILLDESC_BuildStatListDesc (0x4e49c0), which collects every damage kind into a
@@ -55,6 +57,19 @@ export const DamageStringIds = {
   PoisonRange: 3621,
 
   DamageToUndead: 3554,
+
+  // D2R (sub_1401ea180) names these by key; 1.14d's 3612-3623 do not exist there.
+  ResurrectedPhysicalRange: 10037,
+  ResurrectedFireSingle: 10026,
+  ResurrectedFireRange: 10027,
+  ResurrectedColdSingle: 10028,
+  ResurrectedColdRange: 10029,
+  ResurrectedLightningSingle: 10030,
+  ResurrectedLightningRange: 10031,
+  ResurrectedMagicSingle: 10032,
+  ResurrectedMagicRange: 10033,
+  ResurrectedPoisonSingle: 10034,
+  ResurrectedPoisonRange: 10035,
 } as const;
 
 class DamagePair {
@@ -82,25 +97,41 @@ export class ItemDamageAggregate {
   private physicalEmitted = false;
 
   private readonly strings: IStringTable;
+  private readonly resurrected: boolean;
 
   constructor(
     strings: IStringTable | null | undefined,
     values: IStatValueSource | null | undefined,
+    resurrected = false,
   ) {
     if (strings === null || strings === undefined) throw new Error('strings');
 
     this.strings = strings;
+    this.resurrected = resurrected;
 
-    this.fire.singleStringId = DamageStringIds.FireSingle;
-    this.fire.rangeStringId = DamageStringIds.FireRange;
-    this.cold.singleStringId = DamageStringIds.ColdSingle;
-    this.cold.rangeStringId = DamageStringIds.ColdRange;
-    this.lightning.singleStringId = DamageStringIds.LightningSingle;
-    this.lightning.rangeStringId = DamageStringIds.LightningRange;
-    this.magic.singleStringId = DamageStringIds.MagicSingle;
-    this.magic.rangeStringId = DamageStringIds.MagicRange;
-    this.poison.singleStringId = DamageStringIds.PoisonSingle;
-    this.poison.rangeStringId = DamageStringIds.PoisonRange;
+    if (resurrected) {
+      this.fire.singleStringId = DamageStringIds.ResurrectedFireSingle;
+      this.fire.rangeStringId = DamageStringIds.ResurrectedFireRange;
+      this.cold.singleStringId = DamageStringIds.ResurrectedColdSingle;
+      this.cold.rangeStringId = DamageStringIds.ResurrectedColdRange;
+      this.lightning.singleStringId = DamageStringIds.ResurrectedLightningSingle;
+      this.lightning.rangeStringId = DamageStringIds.ResurrectedLightningRange;
+      this.magic.singleStringId = DamageStringIds.ResurrectedMagicSingle;
+      this.magic.rangeStringId = DamageStringIds.ResurrectedMagicRange;
+      this.poison.singleStringId = DamageStringIds.ResurrectedPoisonSingle;
+      this.poison.rangeStringId = DamageStringIds.ResurrectedPoisonRange;
+    } else {
+      this.fire.singleStringId = DamageStringIds.FireSingle;
+      this.fire.rangeStringId = DamageStringIds.FireRange;
+      this.cold.singleStringId = DamageStringIds.ColdSingle;
+      this.cold.rangeStringId = DamageStringIds.ColdRange;
+      this.lightning.singleStringId = DamageStringIds.LightningSingle;
+      this.lightning.rangeStringId = DamageStringIds.LightningRange;
+      this.magic.singleStringId = DamageStringIds.MagicSingle;
+      this.magic.rangeStringId = DamageStringIds.MagicRange;
+      this.poison.singleStringId = DamageStringIds.PoisonSingle;
+      this.poison.rangeStringId = DamageStringIds.PoisonRange;
+    }
 
     if (values === null || values === undefined) {
       return;
@@ -229,6 +260,14 @@ export class ItemDamageAggregate {
           return null;
         }
 
+        // 0x1401ea6f9: D2R formats the MAX (stat 17) into "%+d%% Enhanced Damage"; a min below max
+        // would name a key neither string table has.
+        if (this.resurrected) {
+          return this.enhanced.min < this.enhanced.max
+            ? this.format(-1, this.enhanced.min, this.enhanced.max)
+            : this.format(DamageStringIds.EnhancedDamage, this.enhanced.max);
+        }
+
         return (
           this.str(DescStringIds.Plus) +
           TblFormat.formatNumber(this.enhanced.min) +
@@ -299,7 +338,11 @@ export class ItemDamageAggregate {
       return null;
     }
 
-    const text = this.format(DamageStringIds.PhysicalRange, this.physical.min, this.physical.max);
+    const text = this.format(
+      this.resurrected ? DamageStringIds.ResurrectedPhysicalRange : DamageStringIds.PhysicalRange,
+      this.physical.min,
+      this.physical.max,
+    );
     this.physicalEmitted = true;
     return text;
   }
@@ -350,7 +393,24 @@ export class ItemDamageAggregate {
     return pair.bothPresent ? '' : null;
   }
 
+  private static readonly EnhancedDamageRangeKey = 'strModEnhancedDamageRange';
+
   private format(stringId: number, ...args: unknown[]): string {
+    if (this.resurrected) {
+      // -1 is the key strModEnhancedDamageRange, which neither D2R table holds, so the game
+      // formats the missing-string text.
+      const table = this.strings instanceof StringTable ? this.strings : null;
+      const format =
+        stringId >= 0
+          ? this.str(stringId)
+          : table === null
+            ? ''
+            : table.getByKey(ItemDamageAggregate.EnhancedDamageRangeKey);
+      // 1.14d's strings carry their own newline; D2R's do not, and every emitted aggregate line
+      // gets the `newline` key appended (0x1401ea91e).
+      return CFormat.sprintf(format, ...args) + this.str(DescStringIds.Newline);
+    }
+
     return TblFormat.formatBounded(this.str(stringId), TblFormat.DefaultMaxLength, ...args);
   }
 
@@ -373,6 +433,7 @@ export class UndeadDamageLine {
     strings: IStringTable | null | undefined,
     values: IStatValueSource | null | undefined,
     isMainStatBlock: boolean,
+    resurrected = false,
   ): string | null {
     if (strings === null || strings === undefined) throw new Error('strings');
 
@@ -390,6 +451,16 @@ export class UndeadDamageLine {
 
     if (values.getItemStatValue(DamageStatIds.UndeadDamagePercent) !== 0) {
       return null;
+    }
+
+    // 0x1401e9625: "%+d%% Damage to Undead" as a format.
+    if (resurrected) {
+      return (
+        CFormat.sprintf(
+          UndeadDamageLine.nz(strings.getByIndex(DamageStringIds.DamageToUndead)),
+          UndeadDamageLine.InherentPercent,
+        ) + UndeadDamageLine.nz(strings.getByIndex(DescStringIds.Newline))
+      );
     }
 
     return (

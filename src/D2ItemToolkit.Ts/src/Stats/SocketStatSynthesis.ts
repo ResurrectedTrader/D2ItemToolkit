@@ -100,17 +100,19 @@ export class SocketStatSynthesis {
   }
 
   /**
-   * ONE filler's properties, so a caller can range or describe each socket separately rather than as
-   * the union `contributions` returns.
+   * ONE filler's gems.txt properties, so a caller can range each socket separately rather than as
+   * the union `contributions` returns — whether or not it carries a captured list. A server-side
+   * capture holds the list ITEMS_ApplyGemOrRuneAndRefreshSets assigned to the filler (0x1400a6772),
+   * but what it rolled from is still this row.
    */
-  fillerPropertiesOf(filler: Unit | null, slot: number): ItemProperty[] {
+  gemsTxtProperties(filler: Unit | null, slot: number): ItemProperty[] {
     const found: ItemProperty[] = [];
 
     if (slot < 0 || slot > 2) {
       return found;
     }
 
-    const row = this.fillerRow(filler);
+    const row = this.gemsRow(filler);
     if (row < 0) {
       return found;
     }
@@ -176,6 +178,24 @@ export class SocketStatSynthesis {
       filler === null ||
       ItemStatReader.reconstructView(filler, ItemStatView.modifiers()).size !== 0
     ) {
+      return -1;
+    }
+
+    return this.gemsRow(filler);
+  }
+
+  /** Whether the filler is a gem or rune with a gems.txt row, captured list or not. */
+  isGemOrRune(filler: Unit | null): boolean {
+    return this.gemsRow(filler) >= 0;
+  }
+
+  /** A gem or rune with a gems.txt row that arrived WITHOUT a captured list. */
+  isUncapturedGemOrRune(filler: Unit | null): boolean {
+    return this.fillerRow(filler) >= 0;
+  }
+
+  private gemsRow(filler: Unit | null): number {
+    if (filler === null) {
       return -1;
     }
 

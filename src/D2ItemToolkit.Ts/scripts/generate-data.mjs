@@ -12,15 +12,22 @@ import { gzipSync } from 'fflate';
 
 const here = fileURLToPath(new URL('./', import.meta.url));
 const dataRoot = path.resolve(here, '../../../data');
-const outFile = path.resolve(here, '../src/Data/EmbeddedDataBlob.ts');
+const outDir = path.resolve(here, '../src/Data');
 
-// The three trees the C# embeds, under the same names D2DataFiles asks for.
-const TREES = ['excel', 'locale/eng', 'global'];
+// The trees the C# embeds, under the same names D2DataFiles asks for. Diablo II: Resurrected gets
+// its own blob so a 1.14d-only consumer never inflates it.
+const BLOBS = [
+  { file: 'EmbeddedDataBlob.ts', trees: ['excel', 'locale/eng', 'global'] },
+  {
+    file: 'EmbeddedResurrectedDataBlob.ts',
+    trees: ['d2r/excel', 'd2r/excel/base', 'd2r/strings', 'd2r/strings-legacy', 'd2r/global'],
+  },
+];
 
-function collect() {
+function collect(trees) {
   const entries = [];
 
-  for (const tree of TREES) {
+  for (const tree of trees) {
     const directory = path.join(dataRoot, ...tree.split('/'));
     for (const name of readdirSync(directory).sort()) {
       const full = path.join(directory, name);
@@ -72,20 +79,21 @@ function pack(entries) {
   return out;
 }
 
-const entries = collect();
-const raw = pack(entries);
-// mtime 0 is load-bearing: the gzip header carries a modification time, so without pinning it the
-// output differs on every run and the "is the blob stale?" check in CI can never pass.
-const compressed = gzipSync(raw, { level: 9, mtime: 0 });
-const base64 = Buffer.from(compressed).toString('base64');
+function write(blob) {
+  const entries = collect(blob.trees);
+  const raw = pack(entries);
+  // mtime 0 is load-bearing: the gzip header carries a modification time, so without pinning it
+  // the output differs on every run and the "is the blob stale?" check in CI can never pass.
+  const compressed = gzipSync(raw, { level: 9, mtime: 0 });
+  const base64 = Buffer.from(compressed).toString('base64');
 
-// Chunked so the generated file stays openable in an editor and does not sit on one 700 KB line.
-const chunks = [];
-for (let at = 0; at < base64.length; at += 1000) {
-  chunks.push("  '" + base64.slice(at, at + 1000) + "',");
-}
+  // Chunked so the generated file stays openable in an editor and does not sit on one long line.
+  const chunks = [];
+  for (let at = 0; at < base64.length; at += 1000) {
+    chunks.push("  '" + base64.slice(at, at + 1000) + "',");
+  }
 
-const source = `/* eslint-disable */
+  const source = `/* eslint-disable */
 // GENERATED FILE — do not edit by hand.
 // Regenerate with \`npm run generate:data\` after changing the repository's data/ tree.
 //
@@ -97,10 +105,15 @@ ${chunks.join('\n')}
 ].join('');
 `;
 
-mkdirSync(path.dirname(outFile), { recursive: true });
-writeFileSync(outFile, source, 'utf8');
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(path.join(outDir, blob.file), source, 'utf8');
 
-console.log(
-  entries.length + ' files, ' + (raw.length / 1024).toFixed(0) + ' KB raw -> '
-  + (compressed.length / 1024).toFixed(0) + ' KB gzip -> '
-  + (base64.length / 1024).toFixed(0) + ' KB base64');
+  console.log(
+    blob.file + ': ' + entries.length + ' files, ' + (raw.length / 1024).toFixed(0) + ' KB raw -> '
+    + (compressed.length / 1024).toFixed(0) + ' KB gzip -> '
+    + (base64.length / 1024).toFixed(0) + ' KB base64');
+}
+
+for (const blob of BLOBS) {
+  write(blob);
+}

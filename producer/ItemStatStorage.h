@@ -73,6 +73,7 @@ namespace ItemStatKeys
 	static constexpr const char* Skills     = "skills";
 	static constexpr const char* SkillId    = "skill";
 	static constexpr const char* SkillLevel = "level";
+	static constexpr const char* LastUsedSkill = "lastUsedSkill";
 
 }
 

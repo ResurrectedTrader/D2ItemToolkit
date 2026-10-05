@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/node_modules/**',
       // Generated from data/ by scripts/generate-data.mjs — one ~700 KB base64 literal.
       'src/D2ItemToolkit.Ts/src/Data/EmbeddedDataBlob.ts',
+      'src/D2ItemToolkit.Ts/src/Data/EmbeddedResurrectedDataBlob.ts',
       // Corpus harnesses, generated fixtures and vitest configs: outside the package tsconfig,
       // so type-aware linting has no project to resolve them against.
       'tests/corpus/**',

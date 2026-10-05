@@ -3,9 +3,9 @@
 [![NuGet](https://img.shields.io/nuget/v/D2ItemToolkit.svg)](https://www.nuget.org/packages/D2ItemToolkit)
 [![npm](https://img.shields.io/npm/v/d2itemtoolkit.svg)](https://www.npmjs.com/package/d2itemtoolkit)
 
-Diablo II 1.14d's item description engine, reimplemented from the disassembly. Hand it a unit and
-it renders the tooltip the game would draw for it — the same text, the same order, the same
-colours.
+Diablo II's item description engine, reimplemented from the disassembly — for **1.14d** and for
+**Diablo II: Resurrected** (both its base tables and Reign of the Warlock). Hand it a unit and it
+renders the tooltip the game would draw for it — the same text, the same order, the same colours.
 
 Available for **C#** (`D2ItemToolkit`) and **TypeScript** (`d2itemtoolkit`). The game's tables are
 embedded in both packages, so there is nothing to download or point at.
@@ -32,9 +32,9 @@ data and need to show it the way a player expects to see it.
 > **Pre-1.0.** The public surface may still move between minor versions.
 
 > **Written by Claude, without human supervision.** Every line of both implementations, the tests,
-> and the docs were produced by an AI agent working from the 1.14d disassembly. Nobody has read it
+> and the docs were produced by an AI agent working from the 1.14d and D2R disassemblies. Nobody has read it
 > line by line. What holds it together is mechanical rather than editorial: a differential test that
-> requires the two implementations to agree byte for byte across ~940 generated cases and ~12,000
+> requires the two implementations to agree byte for byte across ~940 generated 1.14d cases, ~1,100 D2R cases and ~12,000
 > hostile ones, plus captured game output. So treat the *behaviour* as tested and the *source* as
 > unreviewed — it is dense, it comments oddities at the address that causes them, and it will not
 > read like code a human wrote for other humans.
@@ -90,6 +90,48 @@ caches them — hold onto it rather than building an engine per item. Rendering 
 to share between threads.
 
 The tables are inflated **synchronously**, which is what keeps the whole API non-async.
+
+### Game variants
+
+One engine per game. `TooltipEngine.Embedded` is 1.14d, as it always was; `ForVariant` picks
+another, built once and cached like `Embedded`.
+
+| `GameVariant` | the game | tables |
+|---|---|---|
+| `Lod114d` | Diablo II: Lord of Destruction 1.14d | 1.14d MPQ |
+| `Resurrected` | Diablo II: Resurrected, base game (item version 1 or 2) | `excel/base` |
+| `ReignOfTheWarlock` | Diablo II: Resurrected — Reign of the Warlock (item version 3) | `excel` |
+
+```csharp
+Tooltip tip = TooltipEngine.ForVariant(GameVariant.ReignOfTheWarlock).Render(item, player);
+
+// The strings legacy graphics mode shows, e.g. "Quantity: 32" rather than "Quantity: 32 of 500".
+TooltipEngine legacy = TooltipEngine.ForVariant(
+    GameVariant.ReignOfTheWarlock, new ResurrectedTextOptions { LegacyGraphics = true });
+
+// Any of D2R's thirteen locales, with its name grammar: "gezacktes Kurzschwert der Dornen".
+TooltipEngine german = TooltipEngine.ForVariant(
+    GameVariant.ReignOfTheWarlock, new ResurrectedTextOptions { Language = "deDE" });
+```
+
+`ForVariant` with options builds a new engine each call — keep it.
+
+```ts
+const tip = TooltipEngine.forVariant(GameVariant.ReignOfTheWarlock).render(item, player);
+```
+
+**Pick the variant that matches the item.** The record format is the same, but the ids in it are
+indexes into that game's tables, and the tables moved: Reign of the Warlock added 38 magic suffixes
+ahead of the prefixes, so every magic prefix id differs by 38 from 1.14d. A RotW item rendered with
+1.14d tables names the wrong prefix and takes that prefix's level requirement.
+
+What D2R changes on screen, all traced and implemented: the line text comes from printf templates
+(`%+d` and friends), one-affix magic names lose their stray space, durability no longer marks an
+enhanced maximum, quantities read "Quantity: 32 of 500", belts show "Belt Size: +4 Slots", runes and
+event items get their own name colours, the Horadric Cube's usage line moves into the spell
+description, the +3 cap on your own class's oskills is gone, the Warlock takes its place in every
+class table, and there is no 1023-character cut. `docs/resurrected.md` in the repository has the
+full list with addresses.
 
 ## Building a unit in code
 
@@ -193,7 +235,7 @@ parsing markers out of a string.
 
 > **Do not join `line.Text` yourself.** Both string forms spend the game's 1023-character budget
 > across the rows before joining, so a long tooltip truncates where the game truncates. (Set-item
-> tooltips are exempt — that path has no limit.) Each `line.Text` also ends with its own `\n`.
+> tooltips are exempt — that path has no limit — and so is every D2R tooltip.) Each `line.Text` also ends with its own `\n`.
 
 In TypeScript `line.text` is typed `string | null`, so narrow it before use.
 
@@ -206,7 +248,8 @@ none of them changes the output unless you set it.
 | option | default | what it does |
 |---|---|---|
 | `Difficulty` | `0` | `GetDificulity()`. Only a quest item with `questdiffcheck` reads it |
-| `ShopMode` | `0` | 0 outside a shop. Any non-zero value suppresses both usage lines; 1–9 also admit the transaction-cost line, which only the set-item path fills today (see the gap below) |
+| `DesecratedZonesEnabled` | `false` | *D2R only.* Whether the game has desecrated (terror) zones on. The Worldstone Shards' usage condition reads it with `Difficulty`; when the condition fails their name is red |
+| `ShopMode` | `0` | *1.14d only.* 0 outside a shop. Any non-zero value suppresses both usage lines; 1–9 also admit the transaction-cost line, which only the set-item path fills today (see the gap below) |
 | `ClientPlayer` | `null` | The character, when the viewer is a **mercenary** — see below |
 | `Sockets` | `Merged` | *`Excluded` and `Separated` go beyond the game.* What the render does with the socket fillers |
 | `Ranges` | `null` | *Beyond the game.* Non-null writes each stat's roll span inline. `Format` chooses the wording, `Color` the colour (grey by default, so a span reads as an annotation rather than as part of the line; -1 inherits the line's) |
@@ -406,7 +449,8 @@ Three cases return something other than a plain span, and each says so rather th
 
 | | |
 |---|---|
-| `LayerVaries` | the roll picked the *skill*, not the value — Ormus' Robes is always +3, to one of 25 sorceress skills |
+| `LayerVaries` | the roll picked the *skill*, not the value — Ormus' Robes is always +3, to one of 25 sorceress skills. A recorded stat inside that span is explained by it, so it is not reported `Unattributed` |
+| `Choices` | D2R only: the roll picked *which* properties apply (`PropertyGroups.txt` — Wraithstep's skill tab, Opalvein's element, the crafted charms). Each choice lists its options and whether the record resolves, contradicts or leaves it ambiguous |
 | `CraftedRecipeUnknown` | a crafted item's record does not name the cube recipe that made it, and this one could not be worked out, so the recipe's fixed mods stay unattributed |
 | `ItemLevelDependent` | a few properties derive their value from the item's level. Supply `itemLevel` on the record and they become exact |
 
@@ -776,9 +820,9 @@ chosen**, and its reachability is uncounted.
 
 | | |
 |---|---|
-| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **941** |
+| differential corpus cases, C# vs TypeScript, agreeing layer by layer | **943** 1.14d / **1151** RotW + **1136** D2R base, the RotW set in all 13 locales, HD and legacy |
 | hostile producer-legal inputs, both engines agreeing | **11,972** |
-| tests | **1083** C# / **1101** TypeScript |
+| tests | **1263** C# / **1311** TypeScript |
 | captured client tooltips reproduced byte-identically | **64 / 64** |
 
 The capture set is a private `captures.db` of real client tooltips and is not part of this
@@ -793,10 +837,13 @@ or English-only.
 price line is produced on the generic path at all — the routine that computes the price has not
 been decompiled. On the set-item path you get the "cannot be traded here" refusal, which is real.
 
-**Only English.** The embedded tables are the ENG locale, and the possessive form used in item
-names ("Bob's Hat") is wired for English only — twelve other language cases are identified but not
-transcribed. Point `FromFiles` at another locale's tables and the strings change, but the
-possessive grammar does not.
+**1.14d is English only.** Its embedded tables are the ENG locale, and the 1.14d possessive
+("Bob's Hat") is wired for English only. Point `FromFiles` at another locale's tables and the
+strings change, but the possessive grammar does not. **D2R speaks all thirteen of its locales** —
+`ResurrectedTextOptions.Language` takes `enUS`, `deDE`, `esES`, `frFR`, `itIT`, `koKR`, `plPL`,
+`ruRU`, `zhCN`, `zhTW`, `esMX`, `jaJP` or `ptBR`, and item names follow the game's grammar header
+(gendered adjectives) and per-language possessive, including the places the game itself prints a
+raw gender tag such as `de la ballena [fs]Corona`.
 
 **Item level, when the capture omits it.** Three property arms scale with the *item's* level: funcs
 11 and 19 when the property's max is non-positive, and func 14's socket cap. The record carries
@@ -813,7 +860,16 @@ live path: `Ranges` re-applies them to reconstruct roll spans.
 **The C++ producer is unfinished.** An optional capture half that reads a live game's memory. You
 do not need it to use the library — only to generate records from a running client.
 
-**No Diablo II: Resurrected support.** This models 1.14d; D2R's tables and item format differ.
+**Diablo II: Resurrected, the parts that need state a record does not carry.** A Warlock's
+Levitate lowers weapon requirements, except on a throwing weapon while the last skill used was a
+throwing one, and except while two melee weapons are equipped. Both are reproduced, but the first
+needs the viewer's `lastUsedSkill` — without it the reduction is applied — and the second reads
+the viewer's equipped `items`. The Metamorphosis runeword's "Mark of the Bear/Wolf" text runs a
+subset of the skill description calculator — exactly the part those two rows use. One esMX string
+(`ModStr2uPercentNegative`, Bone Break) makes the game print leftover stack memory as a float; that
+output cannot be reproduced and is not. Only the hover tooltip is modelled: item links, chat and
+the Chronicle preview are out of scope. With no viewer D2R draws nothing at all; the library still
+renders, as it does for 1.14d.
 
 ## Contributing
 
@@ -827,7 +883,8 @@ implementations are kept in agreement and what the working rules are.
 Source code is
 [MIT](https://github.com/ResurrectedTrader/D2ItemToolkit/blob/main/LICENSE).
 
-`data/` contains tables extracted from Diablo II 1.14d and embedded in the published packages so
-the library works without a game install. Those files are the property of Blizzard Entertainment
+`data/` contains tables extracted from Diablo II 1.14d, and `data/d2r/` tables and strings
+extracted from Diablo II: Resurrected (data build 91735), embedded in the published packages so the
+library works without a game install. Those files are the property of Blizzard Entertainment
 and are **not** covered by the MIT licence. Diablo II is a trademark of Blizzard Entertainment,
 Inc. This project is not affiliated with, endorsed by, or sponsored by Blizzard Entertainment.

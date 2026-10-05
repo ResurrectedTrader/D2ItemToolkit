@@ -5,6 +5,7 @@ import { unitFromJson, type Unit } from './Stats/Unit.js';
 import { ItemTable } from './Tables/ItemTable.js';
 import { ItemTypeTree } from './Tables/ItemTypeTree.js';
 import { D2DataFiles } from './Tables/TxtDataProviders.js';
+import { GameVariant, type ResurrectedTextOptions } from './Data/GameVariant.js';
 import {
   type ItemTooltipContext,
   type ItemTooltipLine,
@@ -23,7 +24,12 @@ import {
 import { SocketStatSynthesis } from './Stats/SocketStatSynthesis.js';
 import { TooltipEngine } from './Tooltip/TooltipEngine.js';
 import { MagicAffixTable } from './Tables/MagicAffixTable.js';
-import { RolledRangeReconstructor, type ItemRollRanges } from './Stats/RolledRangeReconstructor.js';
+import {
+  RolledRangeReconstructor,
+  type ItemRollRanges,
+  type RolledChoice,
+  type RolledStatRange,
+} from './Stats/RolledRangeReconstructor.js';
 import type { ItemMergedStats } from './Stats/MergedStats.js';
 import { Int32 } from './Types.js';
 
@@ -65,17 +71,43 @@ export interface RenderedRecord {
   error?: string;
 }
 
+interface PackedStatRange {
+  stat: number;
+  layer: number;
+  low: number;
+  high: number;
+  displayLow: number;
+  displayHigh: number;
+  sources: number;
+}
+
+/** One choice, as `PackChoice` in tools/Reference/Program.cs emits it. */
+interface PackedChoice {
+  groupRow: number;
+  code: string;
+  sources: number;
+  pickMode: number;
+  countLow: number;
+  countHigh: number;
+  resolution: number;
+  options: {
+    entry: number;
+    propertyId: number;
+    code: string;
+    weight: number;
+    paramLow: number;
+    paramHigh: number;
+    min: number;
+    max: number;
+    variants: { param: number; stats: PackedStatRange[] }[];
+    nested: PackedChoice | null;
+  }[];
+  consistent: { option: number; param: number }[][];
+}
+
 /** The `ranges` object, shaped to match `PackRanges` in tools/Reference/Program.cs exactly. */
 interface PackedRanges {
-  stats: {
-    stat: number;
-    layer: number;
-    low: number;
-    high: number;
-    displayLow: number;
-    displayHigh: number;
-    sources: number;
-  }[];
+  stats: PackedStatRange[];
   layerVaries: {
     stat: number;
     layerLow: number;
@@ -89,6 +121,7 @@ interface PackedRanges {
   unsupportedFuncs: number[];
   craftedRecipeUnknown: boolean;
   craftedRecipe: number;
+  choices: PackedChoice[];
 }
 
 /** The `mergedStats` object, as `PackMergedStats` in tools/Reference/Program.cs emits it. */
@@ -122,61 +155,75 @@ interface CorpusSetInput {
   fullSetStats?: { id: number; value: number; layer?: number }[];
 }
 
-let cachedData: D2DataFiles | null = null;
-let cachedItems: ItemTable | null = null;
-let cachedTypes: ItemTypeTree | null = null;
-let cachedSocketStats: SocketStatSynthesis | null = null;
-let cachedSets: SetTable | null = null;
-
-function tables(): {
+interface Tables {
   data: D2DataFiles;
   items: ItemTable;
   types: ItemTypeTree;
   socketStats: SocketStatSynthesis;
   sets: SetTable;
-} {
-  if (cachedData === null) {
-    cachedData = D2DataFiles.load();
-    cachedItems = new ItemTable(cachedData.weapons, cachedData.armor, cachedData.misc);
-    cachedTypes = new ItemTypeTree(cachedData.itemTypes);
-    cachedSocketStats = new SocketStatSynthesis(cachedData, cachedItems, cachedTypes);
-    cachedSets = new SetTable(cachedData.sets, cachedData.setItems, cachedData.strings);
+  ranges: RolledRangeReconstructor | null;
+  engine: TooltipEngine | null;
+}
+
+// One set of tables per variant, built on first use: `tools/Reference` takes the variant as an
+// argument and renders every case against it.
+const cachedTables = new Map<string, Tables>();
+
+/** `"deDE"`, or `"deDE+legacy"` for the legacy-graphics strings; null is the default enUS HD set. */
+function textOptions(language: string | null): ResurrectedTextOptions | null {
+  if (language === null) {
+    return null;
   }
 
+  const legacy = language.endsWith('+legacy');
   return {
-    data: cachedData,
-    items: cachedItems as ItemTable,
-    types: cachedTypes as ItemTypeTree,
-    socketStats: cachedSocketStats as SocketStatSynthesis,
-    sets: cachedSets as SetTable,
+    language: legacy ? language.substring(0, language.length - '+legacy'.length) : language,
+    legacyGraphics: legacy,
   };
 }
 
-let cachedRanges: RolledRangeReconstructor | null = null;
-
-function ranges(): RolledRangeReconstructor {
-  if (cachedRanges === null) {
-    const { data, items, types, sets } = tables();
-    cachedRanges = new RolledRangeReconstructor(
+function tables(variant: GameVariant, language: string | null = null): Tables {
+  const key = String(variant) + '/' + (language ?? '');
+  let cached = cachedTables.get(key);
+  if (cached === undefined) {
+    const data =
+      variant === GameVariant.Lod114d
+        ? D2DataFiles.load()
+        : D2DataFiles.loadEmbedded(variant, textOptions(language));
+    const items = new ItemTable(data.weapons, data.armor, data.misc);
+    const types = new ItemTypeTree(data.itemTypes);
+    cached = {
       data,
       items,
       types,
-      new MagicAffixTable(data),
-      sets,
-    );
+      socketStats: new SocketStatSynthesis(data, items, types),
+      sets: new SetTable(data.sets, data.setItems, data.strings),
+      ranges: null,
+      engine: null,
+    };
+    cachedTables.set(key, cached);
   }
 
-  return cachedRanges;
+  return cached;
 }
 
-let cachedEngine: TooltipEngine | null = null;
+function ranges(variant: GameVariant, language: string | null): RolledRangeReconstructor {
+  const t = tables(variant, language);
+  t.ranges ??= new RolledRangeReconstructor(
+    t.data,
+    t.items,
+    t.types,
+    new MagicAffixTable(t.data),
+    t.sets,
+  );
 
-function engine(): TooltipEngine {
-  if (cachedEngine === null) {
-    cachedEngine = TooltipEngine.fromData(tables().data);
-  }
+  return t.ranges;
+}
 
-  return cachedEngine;
+function engine(variant: GameVariant, language: string | null): TooltipEngine {
+  const t = tables(variant, language);
+  t.engine ??= TooltipEngine.fromData(t.data);
+  return t.engine;
 }
 
 function packMergedStats(source: ItemMergedStats): PackedMergedStats {
@@ -186,17 +233,51 @@ function packMergedStats(source: ItemMergedStats): PackedMergedStats {
   };
 }
 
+function packStatRanges(source: readonly RolledStatRange[]): PackedStatRange[] {
+  return source.map(r => ({
+    stat: r.statId,
+    layer: r.layer,
+    low: r.low,
+    high: r.high,
+    displayLow: r.displayLow,
+    displayHigh: r.displayHigh,
+    sources: r.sources,
+  }));
+}
+
+function packChoice(choice: RolledChoice): PackedChoice {
+  return {
+    groupRow: choice.groupRow,
+    code: choice.code,
+    sources: choice.sources,
+    pickMode: choice.pickMode,
+    countLow: choice.countLow,
+    countHigh: choice.countHigh,
+    resolution: choice.resolution,
+    options: choice.options.map(option => ({
+      entry: option.entry,
+      propertyId: option.propertyId,
+      code: option.code,
+      weight: option.weight,
+      paramLow: option.paramLow,
+      paramHigh: option.paramHigh,
+      min: option.min,
+      max: option.max,
+      variants: option.variants.map(variant => ({
+        param: variant.param,
+        stats: packStatRanges(variant.stats),
+      })),
+      nested: option.nested === null ? null : packChoice(option.nested),
+    })),
+    consistent: choice.consistent.map(outcome =>
+      outcome.map(pick => ({ option: pick.option, param: pick.param })),
+    ),
+  };
+}
+
 function packRanges(source: ItemRollRanges): PackedRanges {
   return {
-    stats: source.stats.map(r => ({
-      stat: r.statId,
-      layer: r.layer,
-      low: r.low,
-      high: r.high,
-      displayLow: r.displayLow,
-      displayHigh: r.displayHigh,
-      sources: r.sources,
-    })),
+    stats: packStatRanges(source.stats),
     layerVaries: source.layerVaries.map(r => ({
       stat: r.statId,
       layerLow: r.layerLow,
@@ -210,12 +291,14 @@ function packRanges(source: ItemRollRanges): PackedRanges {
     unsupportedFuncs: [...source.unsupportedFuncs],
     craftedRecipeUnknown: source.craftedRecipeUnknown,
     craftedRecipe: source.craftedRecipe,
+    choices: source.choices.map(packChoice),
   };
 }
 
 function pack(view: ReadonlyMap<number, number>): Record<string, number> {
   const packed: Record<string, number> = {};
-  for (const entry of view) {
+  // Key order, as the C# SortedDictionary writes it: ops 4/5 append their targets to the map.
+  for (const entry of [...view].sort((a, b) => a[0] - b[0])) {
     packed[
       String(ItemStatReader.layerFromKey(entry[0])) +
         '/' +
@@ -334,9 +417,15 @@ function refusal(
  * implies — mirroring render, which derives rather than defaulting to "none". A case with no `set`
  * and no viewer still gets the empty input.
  */
-function readSetInput(set: unknown, record: Unit, wearer: Unit | null): SetItemTooltipInput {
+function readSetInput(
+  set: unknown,
+  record: Unit,
+  wearer: Unit | null,
+  variant: GameVariant,
+  language: string | null,
+): SetItemTooltipInput {
   if (set === null || set === undefined || typeof set !== 'object') {
-    return engine().setStateOf(record, wearer);
+    return engine(variant, language).setStateOf(record, wearer);
   }
 
   const source = set as CorpusSetInput;
@@ -386,11 +475,15 @@ export function renderRecord(
   player: unknown,
   set: unknown = null,
   shopMode = 0,
+  variant: GameVariant = GameVariant.Lod114d,
+  difficulty = 0,
+  desecratedZones = false,
+  language: string | null = null,
 ): RenderedRecord {
   const payload: RenderedRecord = {};
 
   try {
-    const { data, items, types, socketStats, sets } = tables();
+    const { data, items, types, socketStats, sets } = tables(variant, language);
 
     const wearer: Unit | null =
       player === null || player === undefined ? null : unitFromJson(player);
@@ -403,7 +496,7 @@ export function renderRecord(
     // Read BEFORE the socket synthesis: ITEM_RecalcAllEquippedItems 0x4c1350 throws an equipped
     // set item's fillers away (0x4c1658 / 0x4c1661), so `isEquipped` decides whether there is a
     // contribution at all and TooltipEngine.renderSetItem passes it.
-    const setInput = readSetInput(set, unit, wearer);
+    const setInput = readSetInput(set, unit, wearer, variant, language);
 
     let stats = ItemStatReader.reconstructView(unit, ItemStatView.equipped());
     const baseStats = ItemStatReader.reconstructView(unit, ItemStatView.baseOnly());
@@ -416,7 +509,15 @@ export function renderRecord(
     stats = addSynthesised(stats, synthesised);
     modifierStats = addSynthesised(modifierStats, synthesised);
 
+    const preOp = new Map<number, number>(stats);
     ItemStatOps.resolve(stats, baseStats, data.itemStatCost);
+
+    // Mirrors TooltipEngine.compose's D2R ops 4/5 against the viewer (0x14020c57d).
+    if (data.isResurrected && viewer !== null && (viewer.unitType === 0 || viewer.unitType === 1)) {
+      ItemStatOps.resolveLevelScaled(stats, preOp, data.itemStatCost.levelScaledEntries, id =>
+        viewer.stat(id),
+      );
+    }
 
     payload.views = {
       equipped: pack(stats),
@@ -428,16 +529,16 @@ export function renderRecord(
     // colour and the socket-block layout are all outside the differential — exercised only by
     // hand-written tests on each side, which cannot catch the two implementations agreeing to
     // differ.
-    payload.damage = engine()
+    payload.damage = engine(variant, language)
       .damage(unit, wearer)
       .lines.map(l => ({ kind: String(l.kind), min: l.min, max: l.max, modified: l.modified }));
 
-    payload.annotated = engine().render(unit, wearer, {
+    payload.annotated = engine(variant, language).render(unit, wearer, {
       ranges: { color: ItemTooltipColor.White },
       showItemLevel: true,
     }).coloredText;
 
-    payload.socketsSplit = engine().render(unit, wearer, {
+    payload.socketsSplit = engine(variant, language).render(unit, wearer, {
       sockets: 'separated',
       ranges: {},
     }).coloredText;
@@ -445,7 +546,7 @@ export function renderRecord(
     // Breakdown was outside the differential entirely, which left its per-bucket span choice — the
     // item's own for three of them, the fillers' for the fourth — checked only by hand-written
     // tests on each side.
-    const b = engine().breakdown(unit, wearer, { ranges: {} });
+    const b = engine(variant, language).breakdown(unit, wearer, { ranges: {} });
     const texts = (lines: readonly { text: string | null }[]): string[] =>
       lines.map(l => l.text ?? '');
 
@@ -460,20 +561,20 @@ export function renderRecord(
     // affix, unique, runeword and superior codes — so without it those branches are invisible to
     // the differential, which is exactly how the colour-3 marker gap survived.
     payload.ranges = packRanges(
-      ranges().reconstruct(
+      ranges(variant, language).reconstruct(
         item,
         modifierStats,
         socketStats.fillerProperties(unit),
         // The tiers the WEARER has earned, not null. Passing null left RollSources.SetBonus reached
         // by zero of the 935 cases, so the whole earned-set fold sat outside the differential.
-        engine().earnedSetIdsOf(wearer),
+        engine(variant, language).earnedSetIdsOf(wearer),
       ),
     );
 
     // The TOTALS surface, which shares nothing with the render path: it folds the gems.txt
     // synthesis and op 13 into one merged view, so none of that is reachable through the layers
     // above.
-    payload.mergedStats = packMergedStats(engine().mergedStats(unit));
+    payload.mergedStats = packMergedStats(engine(variant, language).mergedStats(unit));
 
     const sections = new RecordSections(
       data,
@@ -492,9 +593,8 @@ export function renderRecord(
       sections.createModifierGenerator(modifierStats),
     );
 
-    const context = sections.createContext();
-
     // Game state, not unit state, so it is carried on the case rather than derived.
+    const context = sections.createContext(difficulty, desecratedZones);
     context.shopMode = shopMode;
 
     const kind = ItemTooltipComposer.classify(context);
@@ -502,7 +602,10 @@ export function renderRecord(
     payload.kind = kind;
 
     let lines: readonly ItemTooltipLine[];
-    let maxLength = ItemTooltipComposer.MaxTooltipLength;
+    // D2R grows its result and never cuts it (0x1401d654c).
+    let maxLength = data.isResurrected
+      ? ItemTooltipComposer.UnlimitedTooltipLength
+      : ItemTooltipComposer.MaxTooltipLength;
 
     if (kind === ItemTooltipKind.IdentifiedSetItem) {
       // The generic composer REFUSES a set item, and that refusal is behaviour worth comparing.

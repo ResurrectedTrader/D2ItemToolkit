@@ -54,7 +54,13 @@ export class ItemTypeTree {
     }
 
     const tiers = this.maxSock[itemTypeRow] as number[];
-    return (itemLevel <= 25 ? tiers[0] : itemLevel <= 40 ? tiers[1] : tiers[2]) as number;
+    return (
+      itemLevel <= (tiers[3] as number)
+        ? tiers[0]
+        : itemLevel <= (tiers[4] as number)
+          ? tiers[1]
+          : tiers[2]
+    ) as number;
   }
 
   constructor(itemTypes: TxtFile | null | undefined) {
@@ -64,13 +70,29 @@ export class ItemTypeTree {
 
     const rows = itemTypes.rowCount;
 
+    // D2R renamed the tiers and made the two level thresholds data (ITEMS_GetMaxSockets
+    // 0x14022bc50: MaxSockets1..3, MaxSocketsLevelThreshold1/2); every shipped row still says 25
+    // and 40. Its level clamp to 1 cannot move a tier, so it is not modelled.
+    const resurrected = itemTypes.hasColumn('MaxSockets1');
     this.maxSock = [];
     for (let row = 0; row < rows; ++row) {
-      this.maxSock.push([
-        itemTypes.getInt(row, 'MaxSock1'),
-        itemTypes.getInt(row, 'MaxSock25'),
-        itemTypes.getInt(row, 'MaxSock40'),
-      ]);
+      this.maxSock.push(
+        resurrected
+          ? [
+              itemTypes.getInt(row, 'MaxSockets1'),
+              itemTypes.getInt(row, 'MaxSockets2'),
+              itemTypes.getInt(row, 'MaxSockets3'),
+              itemTypes.getInt(row, 'MaxSocketsLevelThreshold1'),
+              itemTypes.getInt(row, 'MaxSocketsLevelThreshold2'),
+            ]
+          : [
+              itemTypes.getInt(row, 'MaxSock1'),
+              itemTypes.getInt(row, 'MaxSock25'),
+              itemTypes.getInt(row, 'MaxSock40'),
+              25,
+              40,
+            ],
+      );
     }
 
     this.throwable = new Array<boolean>(rows).fill(false);

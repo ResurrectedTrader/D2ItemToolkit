@@ -1,3 +1,4 @@
+import { CFormat } from '../Description/CFormat.js';
 import type { ItemDescriptionGenerator } from '../Description/ItemDescription.js';
 import { ArgumentNullException, NotSupportedException, isNullOrEmpty } from '../Types.js';
 import type { SetItemTooltipContent, SetPieceLine } from './SetItemTooltip.js';
@@ -90,6 +91,12 @@ export enum ItemTooltipSection {
    * is actually contributing. Never produced otherwise.
    */
   SocketContribution = 'SocketContribution',
+
+  /**
+   * D2R only: "Belt Size: %+d Slots", appended between Durability and the socket-filler
+   * description on both the generic (0x1401d57f6) and the set path.
+   */
+  BeltSize = 'BeltSize',
 }
 
 export const ItemTooltipColor = {
@@ -102,6 +109,12 @@ export const ItemTooltipColor = {
   Crafted: 8,
   Rare: 9,
   Tempered: 10,
+
+  /** D2R: a rune's name, which beats even the broken red (0x1401d7877). */
+  ResurrectedRune: 26,
+
+  /** D2R: an items.txt `EventItem` row's name (0x1401d7863). */
+  ResurrectedEventItem: 28,
 
   MarkerStringId: 3994,
 
@@ -219,6 +232,21 @@ export class ItemTooltipContext {
   isShieldType = false;
 
   shopMode = 0;
+
+  /** Selects D2R's ITEMS_GetFullDescription 0x1401d5200 over LoadItemDesc. */
+  isResurrected = false;
+
+  /** D2R: items.txt `EventItem` (+342). */
+  isEventItem = false;
+
+  /** D2R: IsOfType(item, rune). */
+  isRune = false;
+
+  /**
+   * The tooltip's unit is a player. D2R's set path reddens the class restriction only for a player
+   * of another class, where the generic path reddens any mismatch.
+   */
+  viewerIsPlayer = false;
 }
 
 export interface IItemTooltipSections {
@@ -264,6 +292,33 @@ export class ItemTooltipComposer {
     ItemTooltipSection.RuneLetters,
     ItemTooltipSection.ItemName,
     ItemTooltipSection.TransactionCost,
+  ];
+
+  /**
+   * ITEMS_GetFullDescription 0x1401d6069-0x1401d6538. LoadItemDesc's order with three changes: no
+   * quest-usage line (box and bkd now speak through spelldesc), no cost tail, and the belt-size
+   * line after Durability.
+   */
+  private static readonly ResurrectedAppendOrder: readonly ItemTooltipSection[] = [
+    ItemTooltipSection.EtherealSocketed,
+    ItemTooltipSection.Modifiers,
+    ItemTooltipSection.Unidentified,
+    ItemTooltipSection.AttackSpeed,
+    ItemTooltipSection.RequiredLevel,
+    ItemTooltipSection.RequiredStrength,
+    ItemTooltipSection.RequiredDexterity,
+    ItemTooltipSection.ClassRestriction,
+    ItemTooltipSection.Durability,
+    ItemTooltipSection.BeltSize,
+    ItemTooltipSection.SocketFillerDescription,
+    ItemTooltipSection.CharmDescription,
+    ItemTooltipSection.QuantityAndSpellDescription,
+    ItemTooltipSection.WeaponDamage,
+    ItemTooltipSection.SmiteOrKickDamage,
+    ItemTooltipSection.BlockChance,
+    ItemTooltipSection.ArmorClass,
+    ItemTooltipSection.RuneLetters,
+    ItemTooltipSection.ItemName,
   ];
 
   /**
@@ -386,6 +441,22 @@ export class ItemTooltipComposer {
     ItemTooltipSection.ItemName,
   ];
 
+  /** UI_DrawSetItemDescBox's pSourceStr: the same, with the belt line after Durability. */
+  private static readonly ResurrectedSetGenericAppendOrder: readonly ItemTooltipSection[] = [
+    ItemTooltipSection.RequiredLevel,
+    ItemTooltipSection.RequiredStrength,
+    ItemTooltipSection.RequiredDexterity,
+    ItemTooltipSection.ClassRestriction,
+    ItemTooltipSection.Durability,
+    ItemTooltipSection.BeltSize,
+    ItemTooltipSection.AttackSpeed,
+    ItemTooltipSection.WeaponDamage,
+    ItemTooltipSection.SmiteOrKickDamage,
+    ItemTooltipSection.BlockChance,
+    ItemTooltipSection.ArmorClass,
+    ItemTooltipSection.ItemName,
+  ];
+
   /**
    * ITEM_BuildSetItemTooltip 0x48d1d0 — the tooltip for an identified set item. LoadItemDesc
    * diverts to it at 0x48e432 and returns at 0x48e43d, so the generic path is never built for one
@@ -480,8 +551,12 @@ export class ItemTooltipComposer {
     // ethereal-or-socketed test INV_FormatEtherealSocketedText itself makes, so an ethereal set
     // item that is not socketed gets no "Cannot Be Repaired" line.
     const sharedBufferStart = appended.length;
+    let sharedBytes = 0;
 
     if ((context.flags & ItemTooltipFlags.Socketed) !== 0) {
+      sharedBytes = CFormat.utf8Length(
+        this.sections.getSection(ItemTooltipSection.EtherealSocketed),
+      );
       carriedColor = this.appendSetSection(
         appended,
         this.sections.getSection(ItemTooltipSection.EtherealSocketed),
@@ -495,7 +570,13 @@ export class ItemTooltipComposer {
 
     const suppliedModifiers = this.sections.getSection(ItemTooltipSection.Modifiers);
     const afterModifiers = isNullOrEmpty(suppliedModifiers)
-      ? this.appendModifiers(appended, packedStats)
+      ? this.appendModifiers(
+          appended,
+          packedStats,
+          context.isResurrected
+            ? Math.max(0, ItemTooltipComposer.ResurrectedModifierBytes - sharedBytes)
+            : Number.MAX_SAFE_INTEGER,
+        )
       : this.appendSuppliedModifiers(appended, suppliedModifiers as string);
 
     if (appended.length !== modifiersStart) {
@@ -510,7 +591,9 @@ export class ItemTooltipComposer {
     }
 
     // --- var_2138, appended whole at 0x48d9fe ----------------------------------------------
-    for (const section of ItemTooltipComposer.SetGenericAppendOrder) {
+    for (const section of context.isResurrected
+      ? ItemTooltipComposer.ResurrectedSetGenericAppendOrder
+      : ItemTooltipComposer.SetGenericAppendOrder) {
       if (!context.isWeaponOrArmorType && ItemTooltipComposer.isWeaponOrArmorSection(section)) {
         continue;
       }
@@ -534,12 +617,21 @@ export class ItemTooltipComposer {
       // 0x48d79a-0x48d7ae: the ONLY thing that reddens the name on this path is flag 0x100.
       // Quality is set by construction and the quest/rune/shop arms of resolveItemNameColor have
       // no call site in this writer.
-      const color =
+      let color =
         section === ItemTooltipSection.ItemName
           ? (context.flags & ItemTooltipFlags.Broken) !== 0
             ? ItemTooltipColor.Red
             : ItemTooltipColor.Set
           : this.resolveSectionColor(section, context);
+
+      // UI_DrawSetItemDescBox: the class line is red only for a PLAYER of another class.
+      if (
+        context.isResurrected &&
+        section === ItemTooltipSection.ClassRestriction &&
+        !context.viewerIsPlayer
+      ) {
+        color = ItemTooltipColor.White;
+      }
 
       let running = color;
       let firstOfSection = true;
@@ -573,7 +665,7 @@ export class ItemTooltipComposer {
     }
 
     // --- the inlined cost tail, 0x48da03-0x48db00 ------------------------------------------
-    if (context.shopMode >= 1 && context.shopMode <= 9) {
+    if (!context.isResurrected && context.shopMode >= 1 && context.shopMode <= 9) {
       const cost = this.sections.getSection(ItemTooltipSection.TransactionCost);
 
       if (!isNullOrEmpty(cost)) {
@@ -684,7 +776,9 @@ export class ItemTooltipComposer {
 
     let carriedColor: number = ItemTooltipColor.White;
 
-    for (const section of ItemTooltipComposer.AppendOrder) {
+    for (const section of context.isResurrected
+      ? ItemTooltipComposer.ResurrectedAppendOrder
+      : ItemTooltipComposer.AppendOrder) {
       if (
         section === ItemTooltipSection.TransactionCost &&
         (context.shopMode < 1 || context.shopMode > 9)
@@ -705,7 +799,13 @@ export class ItemTooltipComposer {
 
           const before = appended.length;
           const after = isNullOrEmpty(supplied)
-            ? this.appendModifiers(appended, packedStats)
+            ? this.appendModifiers(
+                appended,
+                packedStats,
+                context.isResurrected
+                  ? ItemTooltipComposer.ResurrectedModifierBytes
+                  : Number.MAX_SAFE_INTEGER,
+              )
             : this.appendSuppliedModifiers(appended, supplied as string);
 
           if (appended.length !== before) {
@@ -1176,8 +1276,8 @@ export class ItemTooltipComposer {
       return part;
     }
 
-    // The game pads a magic or rare name with a trailing space, so a separator of our own reads as
-    // a double space on most items.
+    // 1.14d pads a magic or rare name with a trailing space, so a separator of our own would read as
+    // a double space there; D2R pads neither, and gets the separator.
     const terminator = this.sections.lineTerminator ?? '';
     const body =
       terminator.length !== 0 && part.endsWith(terminator)
@@ -1284,14 +1384,44 @@ export class ItemTooltipComposer {
     return lines;
   }
 
-  private appendModifiers(lines: ItemTooltipLine[], packedStats: PackedStatEntries): number {
+  /**
+   * D2R's byte budgets for the modifier block, in UTF-8 bytes of APPEND order. The walk
+   * (sub_1401E8BE0, 0x1401e91f6-0x1401e9243) strlcats each line into a 1024 buffer, so the line that
+   * crosses 1023 is cut at a byte and every later one dropped. The generic path then wraps the block
+   * in a 4-byte colour code and keeps 1023 again (D2RGFX_D2R_Text_ApplyColorCode 0x14008c9f0, called
+   * at 0x1401d60b4), so 1019 survive. The cut loses the trailing newline, and mergeUnterminatedRuns
+   * joins the next buffer onto that row. Reached by a socketed Arm of King Leoric in ruRU. The set
+   * path appends the modifiers to the buffer already holding the socket text (UI_DrawSetItemDescBox
+   * 0x1401d49ad / 0x1401d49fb) and wraps that whole buffer (0x1401d4da7), so the two share the 1019.
+   */
+  static readonly ResurrectedModifierBytes = 1019;
+
+  private appendModifiers(
+    lines: ItemTooltipLine[],
+    packedStats: PackedStatEntries,
+    byteBudget: number = Number.MAX_SAFE_INTEGER,
+  ): number {
     const terminator = this.sections.lineTerminator ?? '';
 
     let running: number = ItemTooltipColor.Magic;
     let firstOfSection = true;
+    let spent = 0;
 
     for (const modifier of this.modifiers.describe(packedStats)) {
-      const text: string = modifier.preJoined ? modifier.text : modifier.text + terminator;
+      let text: string = modifier.preJoined ? modifier.text : modifier.text + terminator;
+
+      if (byteBudget !== Number.MAX_SAFE_INTEGER) {
+        if (spent >= byteBudget) {
+          break;
+        }
+
+        const bytes = CFormat.utf8Length(text);
+        if (spent + bytes > byteBudget) {
+          text = CFormat.bounded(text, byteBudget - spent + 1);
+        }
+
+        spent += bytes;
+      }
 
       let firstPart = true;
 
@@ -1428,6 +1558,19 @@ export class ItemTooltipComposer {
         color = socketedOrEthereal ? ItemTooltipColor.SocketedOrEthereal : ItemTooltipColor.White;
         break;
       }
+    }
+
+    // D2RGFX_GetStringColorFromItemAndRarity 0x1401d77a0: no shop arm and no code list. Broken
+    // skips the EventItem test (0x1401d7855), and a rune overrides everything, broken included
+    // (0x1401d7877).
+    if (context.isResurrected) {
+      if ((context.flags & ItemTooltipFlags.Broken) !== 0) {
+        color = ItemTooltipColor.Red;
+      } else if (context.isEventItem) {
+        color = ItemTooltipColor.ResurrectedEventItem;
+      }
+
+      return context.isRune ? ItemTooltipColor.ResurrectedRune : color;
     }
 
     if (context.unidentifiedInShop) {

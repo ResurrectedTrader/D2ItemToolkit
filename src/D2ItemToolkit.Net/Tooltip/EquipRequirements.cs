@@ -13,6 +13,9 @@ namespace D2ItemToolkit
     {
         public const int NoClassRestriction = 7;
 
+        // ITEMS_GetClassOfClassSpecificItem 0x14022d230 admits the Warlock: `>= 8 -> 8`.
+        public const int ResurrectedNoClassRestriction = 8;
+
         private const int StatStrength = 0;
         private const int StatDexterity = 2;
         private const int StatRequirementPercent = 91;
@@ -22,9 +25,15 @@ namespace D2ItemToolkit
         private readonly TxtFile _itemTypes;
         private readonly TxtSkillTable _skills;
         private readonly RequiredLevelCalculator _level;
+        private readonly WeaponMastery _mastery;
+        private readonly int _noClassRestriction;
+        private readonly bool _resurrected;
 
         public EquipRequirements(D2DataFiles data, ItemTable items)
         {
+            _resurrected = data.IsResurrected;
+            _noClassRestriction = _resurrected ? ResurrectedNoClassRestriction : NoClassRestriction;
+            _mastery = new WeaponMastery(data, items);
             _items = items;
             _itemTypes = data.ItemTypes;
             _skills = data.Skills;
@@ -36,7 +45,8 @@ namespace D2ItemToolkit
         /// ethereal. The identical expression drives the number at 0x48e65f and the comparison at
         /// 0x62eb8c, so a line can never show a value the check disagrees with.
         /// </summary>
-        public int Requirement(ItemIdentity item, string column, IDictionary<int, int> stats)
+        public int Requirement(
+            ItemIdentity item, string column, IDictionary<int, int> stats, ItemViewer viewer = null)
         {
             int required = _items.GetInt(item.ClassId, column);
             if (required <= 0)
@@ -46,6 +56,12 @@ namespace D2ItemToolkit
 
             // Both sites skip D2ApplyPercent entirely when the percent is zero (0x48e651).
             int percent = Stat(stats, StatRequirementPercent);
+            if (_resurrected)
+            {
+                // 0x1401d5b3b and 0x140227b53 alike, so the line and the met flag still agree.
+                percent += _mastery.RequirementPercent(item, viewer);
+            }
+
             int total = percent != 0 ? required + ApplyPercent(required, percent) : required;
 
             if (item.Has(ItemRecordFlags.Ethereal))
@@ -64,14 +80,14 @@ namespace D2ItemToolkit
             ItemIdentity item, ItemViewer viewer, IDictionary<int, int> stats)
         {
             return MetAttribute(
-                Requirement(item, "reqstr", stats), Attribute(viewer, StatStrength));
+                Requirement(item, "reqstr", stats, viewer), Attribute(viewer, StatStrength));
         }
 
         public bool MetDexterity(
             ItemIdentity item, ItemViewer viewer, IDictionary<int, int> stats)
         {
             return MetAttribute(
-                Requirement(item, "reqdex", stats), Attribute(viewer, StatDexterity));
+                Requirement(item, "reqdex", stats, viewer), Attribute(viewer, StatDexterity));
         }
 
         private static bool MetAttribute(int required, int available)
@@ -100,7 +116,7 @@ namespace D2ItemToolkit
         public bool MetClass(ItemIdentity item, ItemViewer viewer)
         {
             int restriction = ClassRestriction(item);
-            if (restriction == NoClassRestriction)
+            if (restriction == _noClassRestriction)
             {
                 return true;
             }
@@ -116,23 +132,23 @@ namespace D2ItemToolkit
         {
             if (_itemTypes == null || _skills == null)
             {
-                return NoClassRestriction;
+                return _noClassRestriction;
             }
 
             int row = RowFor(_items.PrimaryTypeCode(item.ClassId));
             if (row < 0 || !_itemTypes.HasColumn("Class"))
             {
-                return NoClassRestriction;
+                return _noClassRestriction;
             }
 
             string code = _itemTypes.GetString(row, "Class");
             if (string.IsNullOrEmpty(code.Trim()))
             {
-                return NoClassRestriction;
+                return _noClassRestriction;
             }
 
             int classId = _skills.ClassIdForCode(code);
-            return classId >= 0 && classId < NoClassRestriction ? classId : NoClassRestriction;
+            return classId >= 0 && classId < _noClassRestriction ? classId : _noClassRestriction;
         }
 
         private int RowFor(string code)

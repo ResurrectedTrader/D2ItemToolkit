@@ -15,7 +15,7 @@ namespace D2ItemToolkit
         {
         }
 
-        public TblStringTable Strings { get; private set; }
+        public StringTable Strings { get; private set; }
         public TxtItemStatCostTable ItemStatCost { get; private set; }
         public TxtSkillTable Skills { get; private set; }
         public TxtCharacterClassTable Classes { get; private set; }
@@ -57,7 +57,24 @@ namespace D2ItemToolkit
         public TxtFile Colors { get; private set; }
         public TxtFile Experience { get; private set; }
         public TxtFile Properties { get; private set; }
+
+        // D2R only: the kind-1 targets of a property cell, sub_140214F40 0x140214fb9.
+        internal TxtFile PropertyGroups { get; private set; }
         public TxtFile SkillRows { get; private set; }
+
+        /// <summary>MonType.txt as rows — the second name table of DATATBLS_ItemParamLinker.</summary>
+        internal TxtFile MonTypeRows { get; private set; }
+
+        /// <summary>states.txt; D2R only, for DATATBLS_ItemParamLinker's third name table.</summary>
+        internal TxtFile States { get; private set; }
+
+        /// <summary>DATATBLS_ItemParamLinker 0x140214e40: how a property param cell becomes a number.</summary>
+        internal ItemParamLinker ParamLinker
+        {
+            get { return _paramLinker ?? (_paramLinker = new ItemParamLinker(this)); }
+        }
+
+        private ItemParamLinker _paramLinker;
         public TxtFile PlayerTypes { get; private set; }
         public TxtFile PlayerModes { get; private set; }
 
@@ -77,14 +94,109 @@ namespace D2ItemToolkit
         // linker field over elemtypes.txt `code`, whose ROW INDEX is the stored value (0x612993).
         public TxtFile Missiles { get; private set; }
         public TxtFile ElementTypes { get; private set; }
+
+        // D2R only: the belt-size line reads numboxes off this, 0x1401d584f.
+        public TxtFile Belts { get; private set; }
         public AnimDataFile AnimData { get; private set; }
+
+        /// <summary>The game this data set describes; the engine branches on it.</summary>
+        public GameVariant Variant { get; private set; }
+
+        /// <summary>The D2R locale (enUS, deDE, ...); null for 1.14d.</summary>
+        public string ResurrectedLanguage
+        {
+            get
+            {
+                JsonStringTable table = Strings as JsonStringTable;
+                return table == null ? null : table.Language;
+            }
+        }
+
+        public bool IsResurrected
+        {
+            get { return Variant != GameVariant.Lod114d; }
+        }
 
         public static D2DataFiles LoadEmbedded()
         {
+            return LoadEmbedded(GameVariant.Lod114d);
+        }
+
+        public static D2DataFiles LoadEmbedded(
+            GameVariant variant, ResurrectedTextOptions options = null)
+        {
+            switch (variant)
+            {
+                case GameVariant.Lod114d:
+                    return Build(
+                        GameVariant.Lod114d,
+                        name => Resource("excel." + name),
+                        TblStrings(name => Resource("locale.eng." + name)),
+                        name => Resource("global." + name));
+                case GameVariant.ReignOfTheWarlock:
+                case GameVariant.Resurrected:
+                    // The embedded base/ holds only the tables that differ from excel/; the rest
+                    // are byte-identical, so falling through to excel/ reads the same bytes.
+                    bool isBase = variant == GameVariant.Resurrected;
+                    return Build(
+                        variant,
+                        name => (isBase ? Resource("d2r.excel.base." + name) : null) ??
+                                Resource("d2r.excel." + name),
+                        JsonStrings(
+                            name => Resource("d2r.strings." + name),
+                            name => Resource("d2r.strings-legacy." + name),
+                            options),
+                        name => Resource("d2r.global." + name));
+                default:
+                    throw new ArgumentOutOfRangeException("variant");
+            }
+        }
+
+        /// <summary>
+        /// A D2R extraction: <paramref name="excelDirectory"/> is <c>data/global/excel</c> (or its
+        /// <c>base</c> subdirectory) and <paramref name="stringsDirectory"/> is
+        /// <c>data/local/lng/strings</c>, with <c>strings-legacy</c> beside it.
+        /// </summary>
+        public static D2DataFiles LoadResurrected(
+            GameVariant variant,
+            string excelDirectory,
+            string stringsDirectory,
+            string legacyStringsDirectory = null,
+            string globalDirectory = null,
+            ResurrectedTextOptions options = null)
+        {
+            if (variant == GameVariant.Lod114d) throw new ArgumentOutOfRangeException("variant");
+            if (excelDirectory == null) throw new ArgumentNullException("excelDirectory");
+            if (stringsDirectory == null) throw new ArgumentNullException("stringsDirectory");
+
             return Build(
-                name => Resource("excel." + name),
-                name => Resource("locale.eng." + name),
-                name => Resource("global." + name));
+                variant,
+                name => ReadIfPresent(excelDirectory, name),
+                JsonStrings(
+                    name => ReadIfPresent(stringsDirectory, name),
+                    name => legacyStringsDirectory == null
+                        ? null
+                        : ReadIfPresent(legacyStringsDirectory, name),
+                    options),
+                name => globalDirectory == null ? null : ReadIfPresent(globalDirectory, name));
+        }
+
+        private static Func<StringTable> TblStrings(Func<string, byte[]> locale)
+        {
+            return () => new TblStringTable(
+                ParseTbl(locale("string.tbl")),
+                ParseTbl(locale("patchstring.tbl")),
+                ParseTbl(locale("expansionstring.tbl")));
+        }
+
+        private static Func<StringTable> JsonStrings(
+            Func<string, byte[]> strings,
+            Func<string, byte[]> legacyStrings,
+            ResurrectedTextOptions options)
+        {
+            ResurrectedTextOptions settings = options ?? ResurrectedTextOptions.Default;
+            return () => new JsonStringTable(
+                strings, legacyStrings, settings.LegacyGraphics, settings.Language ?? "enUS");
         }
 
         public static IEnumerable<string> EmbeddedResourceNames
@@ -104,11 +216,31 @@ namespace D2ItemToolkit
 
         private const string ResourcePrefix = "D2ItemToolkit.Data.";
 
+        // D2R ships its tables in lower case, 1.14d in mixed case; the game matches either way.
+        private static readonly Lazy<Dictionary<string, string>> ResourceNames =
+            new Lazy<Dictionary<string, string>>(() =>
+            {
+                var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string name in
+                    typeof(D2DataFiles).GetTypeInfo().Assembly.GetManifestResourceNames())
+                {
+                    names[name] = name;
+                }
+
+                return names;
+            });
+
         private static byte[] Resource(string suffix)
         {
             Assembly assembly = typeof(D2DataFiles).GetTypeInfo().Assembly;
 
-            using (Stream stream = assembly.GetManifestResourceStream(ResourcePrefix + suffix))
+            string name;
+            if (!ResourceNames.Value.TryGetValue(ResourcePrefix + suffix, out name))
+            {
+                return null;
+            }
+
+            using (Stream stream = assembly.GetManifestResourceStream(name))
             {
                 if (stream == null)
                 {
@@ -139,63 +271,69 @@ namespace D2ItemToolkit
             if (localeDirectory == null) throw new ArgumentNullException("localeDirectory");
 
             return Build(
+                GameVariant.Lod114d,
                 name => ReadIfPresent(excelDirectory, name),
-                name => ReadIfPresent(localeDirectory, name),
+                TblStrings(name => ReadIfPresent(localeDirectory, name)),
                 name => globalDirectory == null ? null : ReadIfPresent(globalDirectory, name));
         }
 
         private static D2DataFiles Build(
-            Func<string, byte[]> excel, Func<string, byte[]> locale, Func<string, byte[]> global)
+            GameVariant variant,
+            Func<string, byte[]> excel,
+            Func<StringTable> loadStrings,
+            Func<string, byte[]> global)
         {
-            var strings = new TblStringTable(
-                ParseTbl(locale("string.tbl")),
-                ParseTbl(locale("patchstring.tbl")),
-                ParseTbl(locale("expansionstring.tbl")));
+            StringTable strings = loadStrings();
 
             var data = new D2DataFiles();
+            data.Variant = variant;
             data.Strings = strings;
             data.ItemStatCost = new TxtItemStatCostTable(
-                Required(excel, "ItemStatCost.txt"), strings);
+                Required(excel, variant, "ItemStatCost.txt"), strings);
             data.Skills = new TxtSkillTable(
-                Required(excel, "skills.txt"),
-                Optional(excel, "skilldesc.txt"),
+                Required(excel, variant, "skills.txt"),
+                Optional(excel, variant, "skilldesc.txt"),
                 strings,
-                Optional(excel, "PlayerClass.txt"));
+                Optional(excel, variant, "PlayerClass.txt"));
             data.Classes = new TxtCharacterClassTable(
-                Required(excel, "charstats.txt"), strings);
+                Required(excel, variant, "charstats.txt"), strings);
             data.MonsterTypes = new TxtMonsterTypeTable(
-                Optional(excel, "MonType.txt"),
-                Optional(excel, "monstats.txt"),
+                Optional(excel, variant, "MonType.txt"),
+                Optional(excel, variant, "monstats.txt"),
                 strings);
-            data.ItemTypes = Optional(excel, "ItemTypes.txt");
-            data.Weapons = Optional(excel, "weapons.txt");
-            data.Armor = Optional(excel, "armor.txt");
-            data.Misc = Optional(excel, "misc.txt");
-            data.UniqueItems = Optional(excel, "UniqueItems.txt");
-            data.SetItems = Optional(excel, "SetItems.txt");
-            data.Sets = Optional(excel, "sets.txt");
-            data.MagicSuffix = Optional(excel, "MagicSuffix.txt");
-            data.MagicPrefix = Optional(excel, "MagicPrefix.txt");
-            data.AutoMagic = Optional(excel, "automagic.txt");
-            data.RareSuffix = Optional(excel, "RareSuffix.txt");
-            data.RarePrefix = Optional(excel, "RarePrefix.txt");
-            data.LowQualityItems = Optional(excel, "lowqualityitems.txt");
-            data.QualityItems = Optional(excel, "qualityitems.txt");
-            data.CharStats = Optional(excel, "charstats.txt");
-            data.Gems = Optional(excel, "gems.txt");
-            data.Runes = Optional(excel, "Runes.txt");
-            data.CubeMain = Optional(excel, "cubemain.txt");
-            data.Colors = Optional(excel, "colors.txt");
-            data.Experience = Optional(excel, "Experience.txt");
-            data.Properties = Optional(excel, "Properties.txt");
-            data.SkillRows = Optional(excel, "skills.txt");
-            data.PlayerTypes = Optional(excel, "PlrType.txt");
-            data.PlayerModes = Optional(excel, "PlrMode.txt");
-            data.MonsterStats = Optional(excel, "monstats.txt");
-            data.MonsterStats2 = Optional(excel, "monstats2.txt");
-            data.MonsterModes = Optional(excel, "MonMode.txt");
-            data.Missiles = Optional(excel, "Missiles.txt");
-            data.ElementTypes = Optional(excel, "ElemTypes.txt");
+            data.ItemTypes = Optional(excel, variant, "ItemTypes.txt");
+            data.Weapons = Optional(excel, variant, "weapons.txt");
+            data.Armor = Optional(excel, variant, "armor.txt");
+            data.Misc = Optional(excel, variant, "misc.txt");
+            data.UniqueItems = Optional(excel, variant, "UniqueItems.txt");
+            data.SetItems = Optional(excel, variant, "SetItems.txt");
+            data.Sets = Optional(excel, variant, "sets.txt");
+            data.MagicSuffix = Optional(excel, variant, "MagicSuffix.txt");
+            data.MagicPrefix = Optional(excel, variant, "MagicPrefix.txt");
+            data.AutoMagic = Optional(excel, variant, "automagic.txt");
+            data.RareSuffix = Optional(excel, variant, "RareSuffix.txt");
+            data.RarePrefix = Optional(excel, variant, "RarePrefix.txt");
+            data.LowQualityItems = Optional(excel, variant, "lowqualityitems.txt");
+            data.QualityItems = Optional(excel, variant, "qualityitems.txt");
+            data.CharStats = Optional(excel, variant, "charstats.txt");
+            data.Gems = Optional(excel, variant, "gems.txt");
+            data.Runes = Optional(excel, variant, "Runes.txt");
+            data.CubeMain = Optional(excel, variant, "cubemain.txt");
+            data.Colors = Optional(excel, variant, "colors.txt");
+            data.Experience = Optional(excel, variant, "Experience.txt");
+            data.Properties = Optional(excel, variant, "Properties.txt");
+            data.PropertyGroups = Optional(excel, variant, "propertygroups.txt");
+            data.SkillRows = Optional(excel, variant, "skills.txt");
+            data.MonTypeRows = Optional(excel, variant, "MonType.txt");
+            data.States = Optional(excel, variant, "states.txt");
+            data.PlayerTypes = Optional(excel, variant, "PlrType.txt");
+            data.PlayerModes = Optional(excel, variant, "PlrMode.txt");
+            data.MonsterStats = Optional(excel, variant, "monstats.txt");
+            data.MonsterStats2 = Optional(excel, variant, "monstats2.txt");
+            data.MonsterModes = Optional(excel, variant, "MonMode.txt");
+            data.Missiles = Optional(excel, variant, "Missiles.txt");
+            data.ElementTypes = Optional(excel, variant, "ElemTypes.txt");
+            data.Belts = Optional(excel, variant, "belts.txt");
 
             byte[] animData = global("AnimData.D2");
             data.AnimData = animData == null ? null : AnimDataFile.Parse(animData);
@@ -208,15 +346,17 @@ namespace D2ItemToolkit
             return bytes == null ? null : TblFile.Parse(bytes);
         }
 
-        private static TxtFile Optional(Func<string, byte[]> source, string name)
+        private static TxtFile Optional(
+            Func<string, byte[]> source, GameVariant variant, string name)
         {
             byte[] bytes = source(name);
-            return bytes == null ? null : TxtFile.Load(bytes);
+            return bytes == null ? null : TxtFile.Load(bytes, variant);
         }
 
-        private static TxtFile Required(Func<string, byte[]> source, string name)
+        private static TxtFile Required(
+            Func<string, byte[]> source, GameVariant variant, string name)
         {
-            TxtFile file = Optional(source, name);
+            TxtFile file = Optional(source, variant, name);
             if (file == null)
             {
                 throw new FileNotFoundException("Required data file not found: " + name);
@@ -231,7 +371,8 @@ namespace D2ItemToolkit
             bool isMainStatBlock = true)
         {
             return new ItemDescriptionGenerator(
-                ItemStatCost, Strings, values, Skills, Classes, MonsterTypes, time, isMainStatBlock);
+                ItemStatCost, Strings, values, Skills, Classes, MonsterTypes, time, isMainStatBlock,
+                IsResurrected);
         }
 
         // Extractions vary in case, so fall back to a case-insensitive scan of the directory.
@@ -266,7 +407,7 @@ namespace D2ItemToolkit
         //   absent -> the defaults loop writes 0 (0x6bdfd4), so the engine resolves string.tbl[0];
         //   blank  -> the converter runs and DATATBLS_LookupStringId substitutes 5382 (0x6117c6).
         // Resolving unconditionally prints "an evil force" where the game prints Warriv gossip.
-        internal static int Id(TxtFile file, int row, string column, TblStringTable strings)
+        internal static int Id(TxtFile file, int row, string column, StringTable strings)
         {
             return file.HasColumn(column)
                 ? strings.ResolveKey(file.GetString(row, column))
@@ -274,7 +415,7 @@ namespace D2ItemToolkit
         }
 
         internal static string Text(
-            TxtFile file, int row, string column, TblStringTable strings)
+            TxtFile file, int row, string column, StringTable strings)
         {
             return strings.GetByIndex(Id(file, row, column, strings));
         }
@@ -298,13 +439,17 @@ namespace D2ItemToolkit
 
         public IReadOnlyList<ItemStatOpEntry> PercentOfBaseEntries { get { return _opEntries; } }
 
+        private readonly IReadOnlyList<ItemStatLevelOpEntry> _levelOpEntries;
+
+        internal IReadOnlyList<ItemStatLevelOpEntry> LevelScaledEntries { get { return _levelOpEntries; } }
+
         public int StatIdForName(string name)
         {
             int id;
             return !string.IsNullOrEmpty(name) && _byName.TryGetValue(name, out id) ? id : -1;
         }
 
-        public TxtItemStatCostTable(TxtFile file, TblStringTable strings)
+        public TxtItemStatCostTable(TxtFile file, StringTable strings)
         {
             if (file == null) throw new ArgumentNullException("file");
             if (strings == null) throw new ArgumentNullException("strings");
@@ -318,9 +463,10 @@ namespace D2ItemToolkit
                 }
             }
 
-            // op 13 only. The other ops either cannot fire on an item's statlist (owner-type gates
+            // op 13 here. The other ops either cannot fire on an item's statlist (owner-type gates
             // at 0x626259 onward) or are unreachable with shipped data — 6/7 need act and
-            // period-of-day and their only two users are unspawnable.
+            // period-of-day and their only two users are unspawnable — except D2R's ops 4/5, which
+            // fire on the unit the item is attached to and are collected separately below.
             var ops = new List<ItemStatOpEntry>();
             for (int row = 0; row < file.RowCount; ++row)
             {
@@ -341,6 +487,38 @@ namespace D2ItemToolkit
             }
 
             _opEntries = ops;
+
+            // Ops 4 and 5: the rows DATATBLS_LoadItemStatCostTxt marks for re-evaluation when the
+            // list is attached to a unit (+0x4F, 0x14021bc6d-0x14021bc79).
+            var levelOps = new List<ItemStatLevelOpEntry>();
+            for (int row = 0; row < file.RowCount; ++row)
+            {
+                int op = file.GetInt(row, "op");
+                if (op != 4 && op != 5)
+                {
+                    continue;
+                }
+
+                int opBase;
+                if (!_byName.TryGetValue(file.GetString(row, "op base"), out opBase))
+                {
+                    continue;
+                }
+
+                foreach (string column in OpStatColumns)
+                {
+                    string target = file.GetString(row, column);
+                    int targetRow;
+                    if (target.Length != 0 && _byName.TryGetValue(target, out targetRow))
+                    {
+                        levelOps.Add(new ItemStatLevelOpEntry(
+                            row, targetRow, op, file.GetInt(row, "op param"), opBase,
+                            file.GetInt(opBase, "ValShift")));
+                    }
+                }
+            }
+
+            _levelOpEntries = levelOps;
 
             _stats = new StatDescriptor[file.RowCount];
 
@@ -404,7 +582,7 @@ namespace D2ItemToolkit
             _skillIdShift = stuff >= 1 && stuff <= 8 ? stuff : 6;
         }
 
-        private static int KeyId(TxtFile file, int row, string column, TblStringTable strings)
+        private static int KeyId(TxtFile file, int row, string column, StringTable strings)
         {
             return TxtKeys.Id(file, row, column, strings);
         }
@@ -520,9 +698,10 @@ namespace D2ItemToolkit
         }
     }
 
-    public sealed class TxtSkillTable : ISkillTable
+    public sealed class TxtSkillTable : ISkillTable, ISkillItemProcSource
     {
         private readonly string[] _names;
+        private readonly SkillItemProc[] _itemProcs;
         private readonly int[] _classes;
         private readonly int[] _requiredLevels;
         private readonly int[] _maxLevels;
@@ -530,7 +709,7 @@ namespace D2ItemToolkit
         private readonly string[] _classCodes;
 
         public TxtSkillTable(
-            TxtFile skills, TxtFile skillDesc, TblStringTable strings, TxtFile playerClass = null)
+            TxtFile skills, TxtFile skillDesc, StringTable strings, TxtFile playerClass = null)
         {
             if (skills == null) throw new ArgumentNullException("skills");
             if (strings == null) throw new ArgumentNullException("strings");
@@ -538,6 +717,7 @@ namespace D2ItemToolkit
             _classCodes = BuildClassCodes(playerClass);
 
             _names = new string[skills.RowCount];
+            _itemProcs = new SkillItemProc[skills.RowCount];
             _classes = new int[skills.RowCount];
             _requiredLevels = new int[skills.RowCount];
 
@@ -578,6 +758,7 @@ namespace D2ItemToolkit
                     continue;
                 }
 
+                _itemProcs[row] = SkillItemProc.Read(skills, row, skillDesc, descRow, strings);
                 string name = TxtKeys.Text(skillDesc, descRow, "str name", strings);
 
                 if (name != null)
@@ -662,6 +843,11 @@ namespace D2ItemToolkit
             return skillId >= 0 && skillId < RowCount;
         }
 
+        SkillItemProc ISkillItemProcSource.GetItemProc(int skillId)
+        {
+            return skillId >= 0 && skillId < _itemProcs.Length ? _itemProcs[skillId] : null;
+        }
+
         public string GetSkillName(int skillId)
         {
             return skillId >= 0 && skillId < _names.Length ? _names[skillId] : _sentinel;
@@ -714,7 +900,7 @@ namespace D2ItemToolkit
             get { return _allSkills.Length; }
         }
 
-        public TxtCharacterClassTable(TxtFile file, TblStringTable strings)
+        public TxtCharacterClassTable(TxtFile file, StringTable strings)
         {
             if (file == null) throw new ArgumentNullException("file");
             if (strings == null) throw new ArgumentNullException("strings");
@@ -736,7 +922,7 @@ namespace D2ItemToolkit
             }
         }
 
-        private static string Text(TxtFile file, int row, string column, TblStringTable strings)
+        private static string Text(TxtFile file, int row, string column, StringTable strings)
         {
             return TxtKeys.Text(file, row, column, strings);
         }
@@ -802,7 +988,7 @@ namespace D2ItemToolkit
             get { return _monsterNames.Length; }
         }
 
-        public TxtMonsterTypeTable(TxtFile monType, TxtFile monStats, TblStringTable strings)
+        public TxtMonsterTypeTable(TxtFile monType, TxtFile monStats, StringTable strings)
         {
             if (strings == null) throw new ArgumentNullException("strings");
 

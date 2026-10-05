@@ -133,6 +133,16 @@ namespace D2ItemToolkit.Tests
                 Assert.Contains(required, names);
             }
 
+            // The D2R trees, under the names DataSmoke and the TypeScript listing share.
+            foreach (string required in new[]
+            {
+                "d2r.excel.states.txt", "d2r.excel.base.propertygroups.txt", "d2r.strings.item-names.json",
+                "d2r.strings-legacy.item-names.json", "d2r.global.animdata.d2",
+            })
+            {
+                Assert.Contains(required, names);
+            }
+
             // These pin the extraction: they are the counts only Patch_D2.mpq's tables produce.
             Assert.Equal(359, Data.ItemStatCost.RowCount);
             Assert.Equal(357, Data.Skills.RowCount);

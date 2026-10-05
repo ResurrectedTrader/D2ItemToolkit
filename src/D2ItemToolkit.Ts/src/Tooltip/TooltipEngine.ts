@@ -6,7 +6,12 @@ import {
   type ItemViewer,
 } from '../Stats/ItemRecord.js';
 import { ItemStatOps } from '../Stats/ItemStatOps.js';
-import { ItemStatReader, ItemStatView, sortByKey } from '../Stats/ItemStatReader.js';
+import {
+  ItemStatListFlags,
+  ItemStatReader,
+  ItemStatView,
+  sortByKey,
+} from '../Stats/ItemStatReader.js';
 import type { Unit } from '../Stats/Unit.js';
 import { SocketStatSynthesis } from '../Stats/SocketStatSynthesis.js';
 import type { ItemProperty } from '../Stats/PropertyApplier.js';
@@ -16,6 +21,7 @@ import { ItemInventoryColor } from '../Tables/ItemInventoryColor.js';
 import { ItemInventoryGraphics } from '../Tables/ItemInventoryGraphics.js';
 import { ItemTypeTree } from '../Tables/ItemTypeTree.js';
 import { D2DataFiles } from '../Tables/TxtDataProviders.js';
+import { GameVariant, type ResurrectedTextOptions } from '../Data/GameVariant.js';
 import {
   ItemTooltipColor,
   ItemTooltipComposer,
@@ -29,6 +35,7 @@ import { EquipRequirements } from './EquipRequirements.js';
 import { RequiredLevelCalculator } from './RequiredLevelCalculator.js';
 import { SetTable, type SetItemRecord } from '../Tables/SetTable.js';
 import { MagicAffixTable } from '../Tables/MagicAffixTable.js';
+import { PropertiesTable } from '../Tables/PropertiesTable.js';
 import {
   RolledRangeReconstructor,
   isPackedStat,
@@ -140,6 +147,13 @@ export interface TooltipOptions {
   difficulty?: number;
 
   /**
+   * Diablo II: Resurrected only: whether the game has desecrated (terror) zones enabled. The
+   * Worldstone Shards' UsageConditionCalc reads it with `difficulty`, and a failed condition
+   * reddens the name.
+   */
+  desecratedZonesEnabled?: boolean;
+
+  /**
    * 0 outside a shop. 1-9 add the transaction-cost line, and any non-zero value suppresses both
    * usage lines (0x48d082 tests for exactly zero).
    */
@@ -229,7 +243,11 @@ export interface ItemRequirements {
    * `levelreq`.
    */
   readonly level: number;
-  /** The character class id an item type is restricted to, or EquipRequirements.NoClassRestriction. */
+  /**
+   * The character class id an item type is restricted to, or the variant's "none" value:
+   * EquipRequirements.NoClassRestriction (7) on 1.14d, ResurrectedNoClassRestriction (8) on D2R,
+   * where 7 is the Warlock.
+   */
   readonly classRestriction: number;
   readonly metStrength: boolean;
   readonly metDexterity: boolean;
@@ -348,6 +366,7 @@ function requireUnit(unit: Unit, name: string): void {
  */
 export class TooltipEngine {
   private static embeddedInstance: TooltipEngine | null = null;
+  private static readonly variantInstances = new Map<GameVariant, TooltipEngine>();
 
   /**
    * The parsed game tables, for lookups this library does not do for you. Read-only:
@@ -387,6 +406,11 @@ export class TooltipEngine {
     this.items = new ItemTable(data.weapons, data.armor, data.misc);
     this.types = new ItemTypeTree(data.itemTypes);
     this.sets = new SetTable(data.sets, data.setItems, data.strings);
+
+    // Here as well as in SetItemTooltipBuilder, or ranges' set-bonus fold depended on whether a set
+    // item had been rendered first.
+    const properties = new PropertiesTable(data.properties, data.itemStatCost);
+    this.sets.resolvePropertyCodesWith(code => properties.rowForCode(code));
     this.colors = new ItemInventoryColor(data, this.items, this.types);
     this.graphics = new ItemInventoryGraphics(data, this.items, this.types);
     this.requirementsTable = new EquipRequirements(data, this.items);
@@ -405,6 +429,41 @@ export class TooltipEngine {
   static get embedded(): TooltipEngine {
     TooltipEngine.embeddedInstance ??= new TooltipEngine(D2DataFiles.load());
     return TooltipEngine.embeddedInstance;
+  }
+
+  /**
+   * The embedded tables for `variant`, built once and reused. The D2R variants use HD English
+   * strings; pass `options` for another set, which builds a NEW engine that is not cached — keep
+   * it.
+   */
+  static forVariant(
+    variant: GameVariant,
+    options: ResurrectedTextOptions | null = null,
+  ): TooltipEngine {
+    if (variant === GameVariant.Lod114d) {
+      return TooltipEngine.embedded;
+    }
+
+    if (variant !== GameVariant.Resurrected && variant !== GameVariant.ReignOfTheWarlock) {
+      throw new Error('variant');
+    }
+
+    if (options !== null) {
+      return new TooltipEngine(D2DataFiles.loadEmbedded(variant, options));
+    }
+
+    let engine = TooltipEngine.variantInstances.get(variant);
+    if (engine === undefined) {
+      engine = new TooltipEngine(D2DataFiles.loadEmbedded(variant));
+      TooltipEngine.variantInstances.set(variant, engine);
+    }
+
+    return engine;
+  }
+
+  /** Which game this engine renders for. */
+  get variant(): GameVariant {
+    return this.data.variant;
   }
 
   /**
@@ -459,7 +518,7 @@ export class TooltipEngine {
     // Installed BEFORE composing, because the annotation is written into each line's text as it is
     // built rather than patched onto the finished list.
     if ((options.ranges ?? null) !== null) {
-      this.installRangeAnnotations(composed.composer, item, options, includeSockets);
+      this.installRangeAnnotations(composed.composer, item, viewer, options, includeSockets);
     }
 
     composed.composer.itemLevelSuffix = TooltipEngine.itemLevelSuffixOf(item, options);
@@ -565,20 +624,21 @@ export class TooltipEngine {
 
       if ((options.ranges ?? null) !== null) {
         // A jewel's spans come from ITS OWN affixes, so it is ranged as the item it is. A gem or
-        // rune is ranged from the gems.txt properties it lends the host — which in shipped data
-        // never roll, so those blocks come out unannotated.
-        composer.rangeAnnotation = carriesOwnStats
-          ? this.buildRangeAnnotation(filler, options)
-          : TooltipEngine.lookup(
+        // rune is ranged from the gems.txt properties it lends the host, even when a server capture
+        // carried its list — which in shipped data never roll, so those blocks come out
+        // unannotated.
+        composer.rangeAnnotation = this.rangedFromGemsTxt(filler)
+          ? TooltipEngine.lookup(
               this.rangesReconstructor.reconstruct(
                 ItemRecordReader.readIdentity(item),
                 null,
-                this.socketStats.fillerPropertiesOf(filler, slot),
+                this.socketStats.gemsTxtProperties(filler, slot),
                 null,
                 false,
               ),
               options,
-            );
+            )
+          : this.buildRangeAnnotation(filler, options);
         composer.rangeColor = options.ranges?.color ?? ItemTooltipColor.SocketedOrEthereal;
       }
 
@@ -647,17 +707,24 @@ export class TooltipEngine {
     options: TooltipOptions,
     includeSockets = true,
     includeBaseDefense = true,
+    viewer: Unit | null = null,
   ): (shownStats: readonly number[], layer: number) => string | null {
+    const viewerStat = includeBaseDefense ? this.levelScalingStat(viewer) : null;
+
     const reconstructed =
       includeSockets && includeBaseDefense
-        ? this.ranges(item)
+        ? this.rangesWith(item, null, viewerStat)
         : this.rangesReconstructor.reconstruct(
             ItemRecordReader.readIdentity(item),
-            ItemStatReader.reconstructView(item, itemOwnMods()),
+            includeSockets
+              ? this.modifiersWithFillers(item)
+              : ItemStatReader.reconstructView(item, itemOwnMods()),
             includeSockets ? this.allSocketProperties(item) : null,
             null,
             true,
             includeBaseDefense,
+            TooltipEngine.earnedTierStates(item),
+            viewerStat,
           );
 
     return TooltipEngine.lookup(reconstructed, options);
@@ -679,12 +746,53 @@ export class TooltipEngine {
   private installRangeAnnotations(
     composer: ItemTooltipComposer,
     item: Unit,
+    viewer: Unit | null,
     options: TooltipOptions,
     includeSockets: boolean,
   ): void {
     composer.rangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets, false);
-    composer.sectionRangeAnnotation = this.buildRangeAnnotation(item, options, includeSockets);
+    composer.sectionRangeAnnotation = this.buildRangeAnnotation(
+      item,
+      options,
+      includeSockets,
+      true,
+      viewer,
+    );
     composer.rangeColor = options.ranges?.color ?? ItemTooltipColor.SocketedOrEthereal;
+  }
+
+  /**
+   * The unit D2R's Defense line attaches the item to, which re-runs ops 4/5 against it (0x14020c57d)
+   * — only a player or monster. The same gate as `compose`.
+   */
+  private levelScalingStat(viewer: Unit | null): ((statId: number) => number) | null {
+    if (!this.data.isResurrected || viewer === null) {
+      return null;
+    }
+
+    const player = ItemRecordReader.readViewer(viewer);
+    return player.unitType === 0 || player.unitType === 1 ? id => player.stat(id) : null;
+  }
+
+  /**
+   * The set-tier lists that count toward the item's stats: states 165..169 still MAGIC but no longer
+   * STATLIST_SET, which ITEMS_RecalculateSetItemSpecificMods 0x14028ab90 clears once the tier is
+   * earned.
+   */
+  private static earnedTierStates(item: Unit): Set<number> {
+    const earned = new Set<number>();
+    for (const list of item.statsLists) {
+      if (
+        list.stateNo >= 165 &&
+        list.stateNo <= 169 &&
+        (list.flags & ItemStatListFlags.Magic) !== 0 &&
+        (list.flags & ItemStatListFlags.Set) === 0
+      ) {
+        earned.add(list.stateNo);
+      }
+    }
+
+    return earned;
   }
 
   /**
@@ -702,10 +810,9 @@ export class TooltipEngine {
 
     if (slot >= 0) {
       for (const filler of host.items) {
-        properties.push(...this.socketStats.fillerPropertiesOf(filler, slot));
-
         // A jewel contributes nothing through gems.txt; its own affixes are the roll.
-        if (this.socketStats.contribution(filler, slot).size !== 0) {
+        if (this.rangedFromGemsTxt(filler)) {
+          properties.push(...this.socketStats.gemsTxtProperties(filler, slot));
           continue;
         }
 
@@ -809,7 +916,7 @@ export class TooltipEngine {
     }
 
     if ((options.ranges ?? null) !== null) {
-      this.installRangeAnnotations(composed.composer, item, options, includeSockets);
+      this.installRangeAnnotations(composed.composer, item, viewer, options, includeSockets);
     }
 
     composed.composer.itemLevelSuffix = TooltipEngine.itemLevelSuffixOf(item, options);
@@ -865,8 +972,18 @@ export class TooltipEngine {
     // DERIVED, not a knob. 0x48ec3f gates the marker on the items.txt `quest` byte of the item's
     // own row (+0x12A) and excludes Wirt's Leg by code (0x48ec52, 'leg '); nothing the caller
     // supplies reaches it.
-    const questPrefix = composed.context.isQuestItem && !composed.context.isWirtsLeg;
+    // D2R has no such marker: ITEMS_GetFullDescription ends with the name (0x1401d6538).
+    const questPrefix =
+      !composed.context.isResurrected &&
+      composed.context.isQuestItem &&
+      !composed.context.isWirtsLeg;
     const composer = composed.composer;
+
+    // D2R grows the result as a D2RString and never cuts it (0x1401d654c); its only limits are per
+    // section buffer.
+    if (composed.context.isResurrected) {
+      maxLength = ItemTooltipComposer.UnlimitedTooltipLength;
+    }
 
     return {
       kind: composed.kind,
@@ -936,8 +1053,8 @@ export class TooltipEngine {
     const metClass = this.requirementsTable.metClass(identity, player);
 
     return {
-      strength: this.requirementsTable.requirement(identity, 'reqstr', stats),
-      dexterity: this.requirementsTable.requirement(identity, 'reqdex', stats),
+      strength: this.requirementsTable.requirement(identity, 'reqstr', stats, player),
+      dexterity: this.requirementsTable.requirement(identity, 'reqdex', stats, player),
       level: this.level.calculate(identity, player, stats, socketUnits, sockets),
       classRestriction: this.requirementsTable.classRestriction(identity),
       metStrength,
@@ -1016,7 +1133,9 @@ export class TooltipEngine {
         continue;
       }
 
-      owned.push(carried.unit.fileIndex);
+      if (carried.owned) {
+        owned.push(carried.unit.fileIndex);
+      }
 
       if (carried.worn) {
         worn |= 1 << carried.piece.slot;
@@ -1090,12 +1209,25 @@ export class TooltipEngine {
    */
   private *carriedSetPieces(
     viewer: Unit,
-  ): Generator<{ unit: Unit; piece: SetItemRecord; worn: boolean }> {
+  ): Generator<{ unit: Unit; piece: SetItemRecord; owned: boolean; worn: boolean }> {
     for (const carried of viewer.items) {
       // GetSetItem 0x486770 takes quality 5 (0x486790) that is IDENTIFIED (CheckItemFlag 0x10,
       // 0x4867a2). Every set item drops unidentified, so a sibling just picked up is the normal
       // case and the game paints it red.
-      if (carried.quality !== QualitySet || !isOwned(carried)) {
+      if (carried.quality !== QualitySet) {
+        continue;
+      }
+
+      // D2R's mask, ITEMS_GetSetItemsMask 0x14022eb70, has no identified test
+      // (0x14022ec4e-0x14022ec75), so an unidentified worn sibling still lights its bit while only
+      // the piece list's ownership walk (0x1401d3889) refuses it.
+      const owned = isOwned(carried);
+      // Grid type 3, which is what the worn mask requires. INVENTORY_PlaceItemInGrid stamps a body
+      // item as `(bodyLoc >= 11) ? 4 : 3` (0x63b1e2), and 11/12 are the swap pair. The mask
+      // additionally refuses flag 0x100 and flag 0x4000 (0x62a446) — a broken piece grants no
+      // bonus even while worn, and it is already drawn red by name.
+      const worn = isWorn(carried) && (owned || this.data.isResurrected);
+      if (!owned && !worn) {
         continue;
       }
 
@@ -1104,15 +1236,7 @@ export class TooltipEngine {
         continue;
       }
 
-      yield {
-        unit: carried,
-        piece,
-        // Grid type 3, which is what the worn mask requires. INVENTORY_PlaceItemInGrid stamps a
-        // body item as `(bodyLoc >= 11) ? 4 : 3` (0x63b1e2), and 11/12 are the swap pair. The mask
-        // additionally refuses flag 0x100 and flag 0x4000 (0x62a446) — a broken piece grants no
-        // bonus even while worn, and it is already drawn red by name.
-        worn: isWorn(carried),
-      };
+      yield { unit: carried, piece, owned, worn };
     }
   }
 
@@ -1120,9 +1244,13 @@ export class TooltipEngine {
    * The same reconstruction as `ranges`, with the earned sets taken FROM THE VIEWER rather than
    * listed by hand — sharing `setStateOf`'s worn-piece rule so the two entry points cannot disagree
    * about which tiers a character has.
+   *
+   * In D2R the Defense span also counts the viewer's ops 4/5, as the Defense line does.
    */
   rangesForViewer(item: Unit, viewer: Unit | null): ItemRollRanges {
-    return this.ranges(item, this.earnedSetIdsOf(viewer));
+    requireUnit(item, 'item');
+
+    return this.rangesWith(item, this.earnedSetIdsOf(viewer), this.levelScalingStat(viewer));
   }
 
   /**
@@ -1265,13 +1393,25 @@ export class TooltipEngine {
   ranges(item: Unit, earnedSetIds: readonly number[] | null = null): ItemRollRanges {
     requireUnit(item, 'item');
 
+    return this.rangesWith(item, earnedSetIds, null);
+  }
+
+  private rangesWith(
+    item: Unit,
+    earnedSetIds: readonly number[] | null,
+    viewerStat: ((statId: number) => number) | null,
+  ): ItemRollRanges {
     // Not equipped, matching breakdown's socket view: an equipped host's fillers are discarded by
     // recalc, which would drop the very properties being ranged.
     return this.rangesReconstructor.reconstruct(
       ItemRecordReader.readIdentity(item),
-      this.recordedForComparison(item),
+      this.recordedForComparison(item, viewerStat),
       this.allSocketProperties(item),
       earnedSetIds,
+      true,
+      true,
+      TooltipEngine.earnedTierStates(item),
+      viewerStat,
     );
   }
 
@@ -1286,15 +1426,30 @@ export class TooltipEngine {
    * reported outOfRange empty, which is the opposite of the signal it exists to give.
    *
    * The total is the op-resolved equipped value — the number the Defense line draws — because the
-   * span is op-resolved too.
+   * span is op-resolved too. Both halves count the socket fillers, as the span does.
    */
-  private recordedForComparison(item: Unit): Map<number, number> {
-    const recorded = ItemStatReader.reconstructView(item, itemOwnMods());
+  private recordedForComparison(
+    item: Unit,
+    viewerStat: ((statId: number) => number) | null,
+  ): Map<number, number> {
+    const recorded = this.modifiersWithFillers(item);
 
-    const equipped = ItemStatReader.reconstructView(item, ItemStatView.equipped());
+    const equipped = addInto(
+      ItemStatReader.reconstructView(item, ItemStatView.equipped()),
+      this.socketStats.contributions(item),
+    );
     const baseStats = ItemStatReader.reconstructView(item, ItemStatView.baseOnly());
 
+    const preOp = new Map<number, number>(equipped);
     ItemStatOps.resolve(equipped, baseStats, this.data.itemStatCost);
+    if (viewerStat !== null) {
+      ItemStatOps.resolveLevelScaled(
+        equipped,
+        preOp,
+        this.data.itemStatCost.levelScaledEntries,
+        viewerStat,
+      );
+    }
 
     const key = ItemStatReader.packStatKey(0, StatDefense);
 
@@ -1315,7 +1470,7 @@ export class TooltipEngine {
    * "Fire Resist +28% [11-20]", where 28 was item plus jewel but 11-20 was the item alone.
    */
   private allSocketProperties(item: Unit): ItemProperty[] {
-    const properties: ItemProperty[] = [...this.socketStats.fillerProperties(item)];
+    const properties: ItemProperty[] = [];
 
     const slot = this.socketStats.slotFor(item);
     if (slot < 0) {
@@ -1323,9 +1478,11 @@ export class TooltipEngine {
     }
 
     for (const filler of item.items) {
-      // A filler the synthesis has nothing to say about is one carrying its own stats, and its
-      // affixes are the roll.
-      if (this.socketStats.contribution(filler, slot).size !== 0) {
+      // A gem or rune rolls from gems.txt even when a server capture hands over the list
+      // ITEMS_ApplyGemOrRuneAndRefreshSets assigned to it (0x1400a6772); anything else is a jewel,
+      // whose affixes are the roll.
+      if (this.rangedFromGemsTxt(filler)) {
+        properties.push(...this.socketStats.gemsTxtProperties(filler, slot));
         continue;
       }
 
@@ -1335,6 +1492,29 @@ export class TooltipEngine {
     }
 
     return properties;
+  }
+
+  /**
+   * Whether a filler's spans come from gems.txt rather than from its own affixes. D2R: any gem or
+   * rune, since a server capture carries the list ITEMS_ApplyGemOrRuneAndRefreshSets assigned to the
+   * filler (0x1400a6772) yet rolled it from gems.txt. 1.14d keeps the uncaptured-only rule, so its
+   * output does not move with this D2R fix.
+   */
+  private rangedFromGemsTxt(filler: Unit): boolean {
+    return this.data.isResurrected
+      ? this.socketStats.isGemOrRune(filler)
+      : this.socketStats.isUncapturedGemOrRune(filler);
+  }
+
+  /**
+   * The item's modifiers with every filler's: the captured lists, plus the gems.txt synthesis for a
+   * gem or rune that arrived without one.
+   */
+  private modifiersWithFillers(item: Unit): Map<number, number> {
+    return addInto(
+      ItemStatReader.reconstructView(item, ItemStatView.modifiers()),
+      this.socketStats.contributions(item),
+    );
   }
 
   /**
@@ -1446,7 +1626,20 @@ export class TooltipEngine {
 
     // The capture is leaf-per-list, so op 13 is folded back in here rather than by the producer.
     // Without it every by-time stat reads its unresolved value.
+    const preOp = new Map<number, number>(stats);
     ItemStatOps.resolve(stats, baseStats, this.data.itemStatCost);
+
+    // D2R reads Defense and damage with the item attached to the viewer, which re-runs ops 4/5
+    // against it — only a player or monster (0x14020c589-0x14020c593).
+    if (
+      this.data.isResurrected &&
+      player !== null &&
+      (player.unitType === 0 || player.unitType === 1)
+    ) {
+      ItemStatOps.resolveLevelScaled(stats, preOp, this.data.itemStatCost.levelScaledEntries, id =>
+        player.stat(id),
+      );
+    }
 
     const socketUnits: ItemUnit[] = includeSockets ? ItemRecordReader.readSocketUnits(item) : [];
 
@@ -1465,7 +1658,10 @@ export class TooltipEngine {
         : ItemRecordReader.readViewer(options.clientPlayer),
     );
 
-    const context = sections.createContext(options.difficulty ?? 0);
+    const context = sections.createContext(
+      options.difficulty ?? 0,
+      options.desecratedZonesEnabled ?? false,
+    );
     context.shopMode = options.shopMode ?? 0;
 
     return {

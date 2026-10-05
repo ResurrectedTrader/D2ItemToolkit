@@ -143,7 +143,7 @@ namespace D2ItemToolkit
         }
     }
 
-    public sealed class TblStringTable : IStringTable
+    public sealed class TblStringTable : StringTable
     {
         public const int PatchBase = 10000;
 
@@ -164,7 +164,7 @@ namespace D2ItemToolkit
         //  * the range tests use the LOW 16 BITS, unsigned (0x524a33);
         //  * with no expansionstring table the id is REWRITTEN to 11078 (0x524a44) and re-tested;
         //  * the base table is asked for the id UNCHANGED (0x524ab8), not id - 10000.
-        public string GetByIndex(int index)
+        public override string GetByIndex(int index)
         {
             int id = index;
 
@@ -220,7 +220,7 @@ namespace D2ItemToolkit
 
         // PATCH FIRST, then expansion, then base (0x524d93 / 0x524dc4 / 0x524de7). Searching base
         // first produced 44 wrong fields against the shipped itemstatcost.bin.
-        public int GetIndexByKey(string key)
+        public override int GetIndexByKey(string key)
         {
             if (string.IsNullOrEmpty(key))
             {
@@ -245,10 +245,16 @@ namespace D2ItemToolkit
         // `> 0`, not `>= 0`: a base hit at index 0 is indistinguishable from a miss, because
         // STRTABLE_LookupString returns 0 for both and DATATBLS_LookupStringId then substitutes
         // 5382 (0x6117c6). Never collapse that sentinel to null — it resolves to real text.
-        public int ResolveKey(string key)
+        public override int ResolveKey(string key)
         {
             int index = string.IsNullOrEmpty(key) ? -1 : GetIndexByKey(key);
             return index > 0 ? index : DescStringIds.DescStr2Sentinel;
+        }
+
+        public override string GetByKey(string key)
+        {
+            int index = GetIndexByKey(key);
+            return index >= 0 ? GetByIndex(index) : null;
         }
     }
 }

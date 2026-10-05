@@ -158,6 +158,13 @@ namespace D2ItemToolkit
         /// reach — SKILLS_GetSkillLevel reads it off the skill list (0x485df1 passes bBonus = 1).
         /// </summary>
         IReadOnlyList<IUnitSkill> Skills { get; }
+
+        /// <summary>
+        /// D2R only: the id of the viewer's last-used skill (pSkillList->pUsedSkill, +0x18). -1
+        /// when the capture did not record one — 0 is a real skill, Attack. A thrown-weapon skill here
+        /// switches the requirement's mastery term to its throwing arm (0x14024d380).
+        /// </summary>
+        int LastUsedSkill { get; }
     }
 
     /// <summary>
@@ -336,6 +343,9 @@ namespace D2ItemToolkit
             return units;
         }
 
+        /// <summary>-1 when not captured — see <see cref="IUnit"/>.</summary>
+        public int LastUsedSkill { get; set; }
+
         public List<UnitSkill> Skills
         {
             get { return _skills; }
@@ -352,6 +362,7 @@ namespace D2ItemToolkit
             ClassId = -1;
             FileIndex = -1;
             ItemLevel = -1;
+            LastUsedSkill = -1;
             Location = -1;
             FlagsEx = UnitFlagExpansion;
             Code = string.Empty;

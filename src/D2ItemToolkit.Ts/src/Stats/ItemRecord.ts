@@ -75,6 +75,15 @@ export class ItemViewer {
   unitType = -1;
   classId = -1;
 
+  /** D2R: pSkillList->pUsedSkill's id, or -1. See `Unit.lastUsedSkill`. */
+  lastUsedSkill = -1;
+
+  /**
+   * The viewer's body-location grid, 0..12, from its carried items at location 1 — what
+   * UNITS_Has_Two_Melee_Equipped 0x140239c30 walks. Empty for a viewer that carries nothing.
+   */
+  readonly body: (ItemIdentity | null)[] = new Array<ItemIdentity | null>(13).fill(null);
+
   // Derived from the viewer's own stat lists, not stated: level is stat 12, strength 0,
   // dexterity 2 — exactly what STATLIST_UnitGetStatValue reads.
   level = 0;
@@ -193,6 +202,16 @@ export class ItemRecordReader {
     const viewer = new ItemViewer();
     viewer.unitType = player.unitType;
     viewer.classId = player.classId;
+    viewer.lastUsedSkill = player.lastUsedSkill;
+
+    // A carried item at location 1 is equipped and `x` is its body location. The active weapon
+    // set always sits at 4/5 — a swap physically moves the items to 11/12
+    // (INVENTORY_PositionItems 0x14013fe40).
+    for (const carried of player.items) {
+      if (carried.location === 1 && carried.x >= 0 && carried.x < viewer.body.length) {
+        viewer.body[carried.x] = ItemRecordReader.readIdentity(carried);
+      }
+    }
 
     const stats = new Map<number, number>();
     for (const group of ItemStatReader.enumerateOwnGroups(player)) {

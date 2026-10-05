@@ -197,17 +197,20 @@ namespace D2ItemToolkit
         }
 
         /// <summary>
-        /// ONE filler's properties, so a caller can range or describe each socket separately rather
-        /// than as the union <see cref="Contributions"/> returns.
+        /// ONE filler's gems.txt properties, so a caller can range each socket separately rather than
+        /// as the union <see cref="Contributions"/> returns — whether or not it carries a captured
+        /// list. A server-side
+        /// capture holds the list ITEMS_ApplyGemOrRuneAndRefreshSets assigned to the filler
+        /// (0x1400a6772), but what it rolled from is still this row.
         /// </summary>
-        public IEnumerable<ItemProperty> FillerProperties(IUnit filler, int slot)
+        public IEnumerable<ItemProperty> GemsTxtProperties(IUnit filler, int slot)
         {
             if (slot < 0 || slot > 2)
             {
                 yield break;
             }
 
-            int row = FillerRow(filler);
+            int row = GemsRow(filler);
             if (row < 0)
             {
                 yield break;
@@ -224,6 +227,18 @@ namespace D2ItemToolkit
             }
         }
 
+        /// <summary>Whether the filler is a gem or rune with a gems.txt row, captured list or not.</summary>
+        public bool IsGemOrRune(IUnit filler)
+        {
+            return GemsRow(filler) >= 0;
+        }
+
+        /// <summary>A gem or rune with a gems.txt row that arrived WITHOUT a captured list.</summary>
+        public bool IsUncapturedGemOrRune(IUnit filler)
+        {
+            return FillerRow(filler) >= 0;
+        }
+
         /// <summary>
         /// The gems.txt row a filler applies from, or -1 when it carries its own stats, is not a gem
         /// or rune, or has no row. The same three gates <see cref="Contribution"/> applies.
@@ -232,6 +247,16 @@ namespace D2ItemToolkit
         {
             if (filler == null
                 || ItemStatReader.ReconstructView(filler, ItemStatView.Modifiers()).Count != 0)
+            {
+                return -1;
+            }
+
+            return GemsRow(filler);
+        }
+
+        private int GemsRow(IUnit filler)
+        {
+            if (filler == null)
             {
                 return -1;
             }

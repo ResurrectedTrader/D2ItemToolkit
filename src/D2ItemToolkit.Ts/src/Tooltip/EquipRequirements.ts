@@ -7,6 +7,7 @@ import {
 import { ItemStatReader } from '../Stats/ItemStatReader.js';
 import type { ItemTable } from '../Tables/ItemTable.js';
 import { RequiredLevelCalculator } from './RequiredLevelCalculator.js';
+import { WeaponMastery } from './WeaponMastery.js';
 import type { D2DataFiles, TxtSkillTable } from '../Tables/TxtDataProviders.js';
 import type { TxtFile } from '../Data/TxtFile.js';
 
@@ -20,6 +21,9 @@ import type { TxtFile } from '../Data/TxtFile.js';
 export class EquipRequirements {
   static readonly NoClassRestriction = 7;
 
+  // ITEMS_GetClassOfClassSpecificItem 0x14022d230 admits the Warlock: `>= 8 -> 8`.
+  static readonly ResurrectedNoClassRestriction = 8;
+
   private static readonly StatStrength = 0;
   private static readonly StatDexterity = 2;
   private static readonly StatRequirementPercent = 91;
@@ -29,8 +33,16 @@ export class EquipRequirements {
   private readonly _itemTypes: TxtFile | null;
   private readonly _skills: TxtSkillTable | null;
   private readonly _level: RequiredLevelCalculator;
+  private readonly _mastery: WeaponMastery;
+  private readonly _noClassRestriction: number;
+  private readonly _resurrected: boolean;
 
   constructor(data: D2DataFiles, items: ItemTable) {
+    this._resurrected = data.isResurrected;
+    this._noClassRestriction = this._resurrected
+      ? EquipRequirements.ResurrectedNoClassRestriction
+      : EquipRequirements.NoClassRestriction;
+    this._mastery = new WeaponMastery(data, items);
     this._items = items;
     this._itemTypes = data.itemTypes;
     this._skills = data.skills;
@@ -42,7 +54,12 @@ export class EquipRequirements {
    * ethereal. The identical expression drives the number at 0x48e65f and the comparison at
    * 0x62eb8c, so a line can never show a value the check disagrees with.
    */
-  requirement(item: ItemIdentity, column: string, stats: Map<number, number> | null): number {
+  requirement(
+    item: ItemIdentity,
+    column: string,
+    stats: Map<number, number> | null,
+    viewer: ItemViewer | null = null,
+  ): number {
     const required = this._items.getInt(item.classId, column);
     if (required <= 0) {
       return 0;
@@ -53,7 +70,12 @@ export class EquipRequirements {
     // The outer add is int32 and WRAPS. That matters beyond the number: the caller writes nothing
     // at all when the total is <= 0 (0x4850fb), so an overflow that lands negative drops the whole
     // Required Strength line rather than printing a large one. A JS double would print it.
-    const percent = EquipRequirements.stat(stats, EquipRequirements.StatRequirementPercent);
+    let percent = EquipRequirements.stat(stats, EquipRequirements.StatRequirementPercent);
+    if (this._resurrected) {
+      // 0x1401d5b3b and 0x140227b53 alike, so the line and the met flag still agree.
+      percent = (percent + this._mastery.requirementPercent(item, viewer)) | 0;
+    }
+
     let total =
       percent !== 0 ? (required + EquipRequirements.applyPercent(required, percent)) | 0 : required;
 
@@ -74,7 +96,7 @@ export class EquipRequirements {
     stats: Map<number, number> | null,
   ): boolean {
     return EquipRequirements.metAttribute(
-      this.requirement(item, 'reqstr', stats),
+      this.requirement(item, 'reqstr', stats, viewer),
       EquipRequirements.attribute(viewer, EquipRequirements.StatStrength),
     );
   }
@@ -85,7 +107,7 @@ export class EquipRequirements {
     stats: Map<number, number> | null,
   ): boolean {
     return EquipRequirements.metAttribute(
-      this.requirement(item, 'reqdex', stats),
+      this.requirement(item, 'reqdex', stats, viewer),
       EquipRequirements.attribute(viewer, EquipRequirements.StatDexterity),
     );
   }
@@ -114,7 +136,7 @@ export class EquipRequirements {
    */
   metClass(item: ItemIdentity, viewer: ItemViewer | null): boolean {
     const restriction = this.classRestriction(item);
-    if (restriction === EquipRequirements.NoClassRestriction) {
+    if (restriction === this._noClassRestriction) {
       return true;
     }
 
@@ -129,23 +151,21 @@ export class EquipRequirements {
     const itemTypes = this._itemTypes;
     const skills = this._skills;
     if (itemTypes === null || skills === null) {
-      return EquipRequirements.NoClassRestriction;
+      return this._noClassRestriction;
     }
 
     const row = this.rowFor(this._items.primaryTypeCode(item.classId));
     if (row < 0 || !itemTypes.hasColumn('Class')) {
-      return EquipRequirements.NoClassRestriction;
+      return this._noClassRestriction;
     }
 
     const code = itemTypes.getString(row, 'Class');
     if (code.trim().length === 0) {
-      return EquipRequirements.NoClassRestriction;
+      return this._noClassRestriction;
     }
 
     const classId = skills.classIdForCode(code);
-    return classId >= 0 && classId < EquipRequirements.NoClassRestriction
-      ? classId
-      : EquipRequirements.NoClassRestriction;
+    return classId >= 0 && classId < this._noClassRestriction ? classId : this._noClassRestriction;
   }
 
   private rowFor(code: string): number {

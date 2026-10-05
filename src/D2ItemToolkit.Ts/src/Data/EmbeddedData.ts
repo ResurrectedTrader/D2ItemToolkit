@@ -1,5 +1,6 @@
 import { gunzipSync } from 'fflate';
 import { EmbeddedArchiveBase64 } from './EmbeddedDataBlob.js';
+import { EmbeddedArchiveBase64 as EmbeddedResurrectedArchiveBase64 } from './EmbeddedResurrectedDataBlob.js';
 import type { ByteSource } from './TxtDataSource.js';
 
 /**
@@ -20,6 +21,7 @@ interface Archive {
 }
 
 let archive: Archive | null = null;
+let resurrectedArchive: Archive | null = null;
 
 function fromBase64(text: string): Uint8Array {
   const scope = globalThis as { atob?: (data: string) => string };
@@ -68,11 +70,18 @@ function parse(bytes: Uint8Array): Archive {
 }
 
 function load(): Archive {
-  if (archive === null) {
-    archive = parse(gunzipSync(fromBase64(EmbeddedArchiveBase64)));
-  }
-
+  archive ??= parse(gunzipSync(fromBase64(EmbeddedArchiveBase64)));
   return archive;
+}
+
+/** The Diablo II: Resurrected trees, kept apart so a 1.14d-only consumer never inflates them. */
+function loadResurrected(): Archive {
+  resurrectedArchive ??= parse(gunzipSync(fromBase64(EmbeddedResurrectedArchiveBase64)));
+  return resurrectedArchive;
+}
+
+function archiveFor(tree: string): Archive {
+  return tree.startsWith('d2r/') ? loadResurrected() : load();
 }
 
 /** True when the package was built with a populated archive. */
@@ -85,14 +94,15 @@ export function hasEmbeddedData(): boolean {
  * matched case-insensitively, matching the directory reader: extractions vary in case.
  */
 export function embeddedSource(tree: string): ByteSource {
-  return name => load().files.get((tree + '/' + name).toLowerCase()) ?? null;
+  return name => archiveFor(tree).files.get((tree + '/' + name).toLowerCase()) ?? null;
 }
 
 /** The file names under one embedded tree, for `D2DataFiles.dataFileNames`. */
 export function embeddedFiles(tree: string): readonly string[] {
   const prefix = tree + '/';
 
-  return load()
-    .names.filter(name => name.startsWith(prefix))
+  // Direct children only: d2r/excel holds d2r/excel/base beneath it.
+  return archiveFor(tree)
+    .names.filter(name => name.startsWith(prefix) && !name.includes('/', prefix.length))
     .map(name => name.substring(prefix.length));
 }

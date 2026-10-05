@@ -17,15 +17,20 @@ namespace D2ItemToolkit
         private const int OffClassSkillPenalty = 6;
         private const int LastPlayerClass = 6;
 
+        // ITEMS_GetRequiredLevel 0x1402288a5 admits the Warlock.
+        private const int ResurrectedLastPlayerClass = 7;
+
         private readonly D2DataFiles _data;
         private readonly ItemTable _items;
         private readonly MagicAffixTable _affixes;
+        private readonly WeaponMastery _mastery;
 
         public RequiredLevelCalculator(D2DataFiles data, ItemTable items)
         {
             _data = data;
             _items = items;
             _affixes = new MagicAffixTable(data);
+            _mastery = data.IsResurrected ? new WeaponMastery(data, items) : null;
         }
 
         /// <summary>
@@ -65,8 +70,11 @@ namespace D2ItemToolkit
             result = RaiseForSkills(result, stats, StatNonClassSkill, viewer, true);
 
             result += Stat(stats, StatLevelRequirement);
+            result = result <= 0 ? 0 : result;
 
-            return result <= 0 ? 0 : result;
+            // Inside the recursion, so a filler's level has had its own 209 applied before the host
+            // takes the max and applies the host's (0x14022875b).
+            return _mastery == null ? result : _mastery.ApplyLevelPercent(item, viewer, result);
         }
 
         private static IEnumerable<ItemUnit> Fillers(
@@ -168,7 +176,8 @@ namespace D2ItemToolkit
         }
 
         // 0x62b859. A classic-format unique shows no level requirement to a viewer without the
-        // expansion flag (0x2000000 tested at 0x62b877).
+        // expansion flag (0x2000000 tested at 0x62b877). D2R asks the viewer's unit version instead
+        // (0x1402283f1, `nVersion != 1`), which a record states through the same expansion flag.
         private int Unique(ItemIdentity item, ItemViewer viewer)
         {
             if (item.FileIndex < 0)
@@ -229,7 +238,7 @@ namespace D2ItemToolkit
                     bool ownClass = viewer != null
                                     && viewer.IsPlayer
                                     && skillClass >= 0
-                                    && skillClass <= LastPlayerClass
+                                    && skillClass <= (_data.IsResurrected ? ResurrectedLastPlayerClass : LastPlayerClass)
                                     && viewer.ClassId == skillClass;
 
                     if (!ownClass)

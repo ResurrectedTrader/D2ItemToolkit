@@ -154,6 +154,12 @@ export interface Unit {
    * reach — SKILLS_GetSkillLevel reads it off the skill list (0x485df1 passes bBonus = 1).
    */
   skills: UnitSkill[];
+  /**
+   * D2R: the viewer's pSkillList->pUsedSkill (D2SkillListStrc +0x18) as a skill id, or -1 when the
+   * pointer is NULL or the capture did not record it. 0 is a real skill (Attack). Read only by the
+   * D2R mastery terms, whose throwing arm keys off it (0x14024d3d0).
+   */
+  lastUsedSkill: number;
 }
 
 /** Every field defaulted, so a caller can build a unit by overriding only what matters. */
@@ -182,6 +188,7 @@ export function createUnit(overrides: Partial<Unit> = {}): Unit {
     location: -1,
     x: 0,
     skills: [],
+    lastUsedSkill: -1,
     ...overrides,
   };
 }
@@ -225,6 +232,7 @@ function readUnit(value: unknown): Unit {
       const s = asObject(skill);
       return { skill: int(s, 'skill', -1), level: int(s, 'level', 0) };
     }),
+    lastUsedSkill: int(o, 'lastUsedSkill', -1),
   };
 }
 

@@ -17,6 +17,11 @@ namespace D2ItemToolkit
         public const int SmiteDamage = 3468;        // "Smite Damage:"
         public const int RequiredLevel = 3469;      // "Required Level:"
         public const int EtherealCannotBeRepaired = 22745;
+
+        // D2R templates with no 1.14d counterpart.
+        public const int EtherealSocketed = 23049;          // "Ethereal (Cannot be Repaired), Socketed (%i)"
+        public const int ThrowDamageRange = 23050;          // "Throw Damage: %d to %d"
+        public const string BeltStorageKey = "BeltStorageModifierInfo";
         public const int KickDamage = 21782;
         public const int OneHandDamage = 3465;      // "One-Hand Damage:"
         public const int TwoHandDamage = 3466;      // "Two-Hand Damage:"
@@ -114,6 +119,9 @@ namespace D2ItemToolkit
         // so CreateContext must run first — every path builds the context before composing, and a
         // caller that skips it gets difficulty 0, which is what a viewerless render meant anyway.
         private int _difficulty;
+
+        // D2R only: the game's desecrated-zones switch, read by UsageConditionCalc.
+        private bool _desecratedZones;
         private readonly MissileTable _missiles;
         private readonly IList<ItemUnit> _socketUnits;
 
@@ -194,8 +202,9 @@ namespace D2ItemToolkit
         /// The composer's context for this item. `difficulty` is GetDificulity() (0x48cb38), the one
         /// input that is game state rather than unit state.
         /// </summary>
-        public ItemTooltipContext CreateContext(int difficulty = 0)
+        public ItemTooltipContext CreateContext(int difficulty = 0, bool desecratedZones = false)
         {
+            _desecratedZones = desecratedZones;
             var context = new ItemTooltipContext();
             context.Quality = (ItemQuality)_item.Quality;
             context.Flags = unchecked((ItemTooltipFlags)(uint)_item.Flags);
@@ -223,6 +232,11 @@ namespace D2ItemToolkit
             context.IsQuestItem = _items.GetInt(_item.ClassId, "quest") != 0;
             context.IsWirtsLeg = string.Equals(
                 PaddedCode(_item.ClassId), WirtsLegCode, StringComparison.Ordinal);
+
+            context.IsResurrected = Resurrected;
+            context.ViewerIsPlayer = _viewer != null && _viewer.IsPlayer;
+            context.IsEventItem = _items.GetInt(_item.ClassId, "EventItem") != 0;
+            context.IsRune = _types.IsOfType(PrimaryType(), SecondaryType(), _types.Row("rune"));
             return context;
         }
 
@@ -384,6 +398,8 @@ namespace D2ItemToolkit
                     return AttackSpeed();
                 case ItemTooltipSection.SocketFillerDescription:
                     return SocketFillerDescription();
+                case ItemTooltipSection.BeltSize:
+                    return BeltSize();
                 default:
                     return null;
             }
@@ -401,6 +417,11 @@ namespace D2ItemToolkit
         /// </summary>
         private string QuestNameColorPrefix()
         {
+            if (Resurrected)
+            {
+                return ResurrectedNameColorPrefix();
+            }
+
             if (_items.GetInt(_item.ClassId, "quest") == 0)
             {
                 return string.Empty;
@@ -423,6 +444,76 @@ namespace D2ItemToolkit
             return _data.Strings.GetByIndex(id) ?? string.Empty;
         }
 
+        private const int ResurrectedQuestColor = 14;
+
+        /// <summary>
+        /// ITEMS_GetName's colour tail, 0x14015853e-0x1401592ab. The difficulty test is `!=`
+        /// (0x140158597), not 1.14d's `&lt;`; the normal quest colour is 14; and a failed
+        /// UsageConditionCalc then prepends red OUTSIDE the quest marker, which still paints.
+        /// </summary>
+        private string ResurrectedNameColorPrefix()
+        {
+            string prefix = string.Empty;
+
+            if (_items.GetInt(_item.ClassId, "quest") != 0)
+            {
+                if (_items.GetInt(_item.ClassId, "questdiffcheck") != 0
+                    && Stat(StatQuestDifficulty) != _difficulty)
+                {
+                    prefix = ItemTooltipColor.Marker + "1";
+                }
+                else if (!string.Equals(
+                             PaddedCode(_item.ClassId), WirtsLegCode, StringComparison.Ordinal))
+                {
+                    prefix = ItemTooltipColor.Marker
+                             + ItemTooltipComposer.EncodeColorDigit(ResurrectedQuestColor);
+                }
+            }
+
+            TxtFile file = FileFor(_item.ClassId);
+            int row = RowFor(_item.ClassId);
+            int usable;
+            if (file != null && row >= 0 && file.HasColumn("UsageConditionCalc")
+                && UsageCondition.TryEvaluate(
+                    file.GetString(row, "UsageConditionCalc"), _difficulty, _desecratedZones,
+                    out usable)
+                && usable == 0)
+            {
+                prefix = ItemTooltipColor.Marker + "1" + prefix;
+            }
+
+            return prefix;
+        }
+
+        private bool Resurrected
+        {
+            get { return _data.IsResurrected; }
+        }
+
+        // D2R's writers sprintf the numbers into the string (SYSTEM_FormatStringBuff 0x14014f1f0).
+        private string Template(int id, params object[] args)
+        {
+            return CFormat.Sprintf(Str(id), args);
+        }
+
+        /// <summary>
+        /// D2R colours a number by calling ApplyColorCode on <c>strstr(template, "%d")</c> before
+        /// formatting (needle at 0x14162ce38), so the marker lands in front of the FIRST <c>%d</c>
+        /// and stays in force to the end of the line. A template with no <c>%d</c> gets none.
+        /// </summary>
+        private string MarkedTemplate(int id, int color, params object[] args)
+        {
+            string template = Str(id);
+            int at = color < 0 ? -1 : template.IndexOf("%d", StringComparison.Ordinal);
+            if (at >= 0)
+            {
+                template = template.Substring(0, at) + ItemTooltipColor.Marker
+                           + ItemTooltipComposer.EncodeColorDigit(color) + template.Substring(at);
+            }
+
+            return CFormat.Sprintf(template, args);
+        }
+
         private string Space { get { return Str(DescStringIds.Space); } }
 
         private string Terminator { get { return Str(DescStringIds.Newline); } }
@@ -443,6 +534,22 @@ namespace D2ItemToolkit
             if (!ethereal && !socketed)
             {
                 return null;
+            }
+
+            // ITEMDESC_SocketsAndEthereality 0x1401d0090: one template per combination. With ENG
+            // text the bytes equal the 1.14d concatenation below.
+            if (Resurrected)
+            {
+                int count = Stat(StatSockets) & 0xFF;
+                if (ethereal && socketed)
+                {
+                    return Template(SectionStringIds.EtherealSocketed, count) + Terminator;
+                }
+
+                return (socketed
+                           ? Template(SectionStringIds.Socketed, count)
+                           : Template(SectionStringIds.EtherealCannotBeRepaired))
+                       + Terminator;
             }
 
             var text = new StringBuilder();
@@ -498,6 +605,14 @@ namespace D2ItemToolkit
                 return null;
             }
 
+            // ITEMDESC_Durability 0x1401d051b formats (cur, max) and nothing else: D2R dropped the
+            // colour-3 marker 1.14d puts on an enhanced max.
+            if (Resurrected)
+            {
+                return Template(SectionStringIds.DurabilityLabel, Stat(StatDurability), max)
+                       + Terminator;
+            }
+
             // 0x484f0b: STATLIST_GetStatBonusFromLists is merged-minus-base (0x625570), and the
             // marker goes on the MAX number alone (0x484fc6) — the current value never carries one.
             string marker = Bonus(StatMaxDurabilityPercent) != 0
@@ -523,7 +638,9 @@ namespace D2ItemToolkit
                 return null;
             }
 
-            return Str(SectionStringIds.RequiredLevel) + Space + level + Terminator;
+            return Resurrected
+                ? Template(SectionStringIds.RequiredLevel, level) + Terminator
+                : Str(SectionStringIds.RequiredLevel) + Space + level + Terminator;
         }
 
         // 0x4850a0 / 0x485170. The caller skips the section when the BASE requirement is 0
@@ -536,13 +653,15 @@ namespace D2ItemToolkit
                 return null;
             }
 
-            int total = _requirements.Requirement(_item, column, _stats);
+            int total = _requirements.Requirement(_item, column, _stats, _viewer);
             if (total <= 0)
             {
                 return null;
             }
 
-            return Str(labelId) + Space + total + Terminator;
+            return Resurrected
+                ? Template(labelId, total) + Terminator
+                : Str(labelId) + Space + total + Terminator;
         }
 
         // 0x485ee0. The by-time contributions are already folded into the runtime value when the
@@ -562,9 +681,17 @@ namespace D2ItemToolkit
 
             // 0x485fb1: SERVER_GetUnitStat reads the item's BASE stat 31 and any difference from
             // the merged value sets the flag the marker at 0x4860de depends on.
-            string marker = BaseStat(StatArmorClass) != armor
-                ? ItemTooltipColor.Marker + "3"
-                : string.Empty;
+            bool modified = BaseStat(StatArmorClass) != armor;
+
+            // ITEMDESC_Defense 0x1401d1d00: the same bytes, by template.
+            if (Resurrected)
+            {
+                return MarkedTemplate(
+                           SectionStringIds.ArmorClass, modified ? ItemTooltipColor.Magic : -1, armor)
+                       + Terminator;
+            }
+
+            string marker = modified ? ItemTooltipColor.Marker + "3" : string.Empty;
 
             return Str(SectionStringIds.ArmorClass) + Space + marker + armor + Terminator;
         }
@@ -623,6 +750,11 @@ namespace D2ItemToolkit
             int min = _items.GetInt(_item.ClassId, "mindam") + extraMin;
             int max = _items.GetInt(_item.ClassId, "maxdam") + extraMax;
 
+            if (Resurrected)
+            {
+                return Template(label, min, max) + Terminator;   // 0x1401d19e0, no marker
+            }
+
             return Str(label) + Space + min + Space + Str(SectionStringIds.To) + Space + max
                    + Terminator;
         }
@@ -630,7 +762,8 @@ namespace D2ItemToolkit
         // 0x485410. Two-handed weapons use stats 23/24 and label 3466; one-handed use 21/22 and
         // 3465. A throwable weapon also gets a throw line (stats 159/160).
         //
-        // OPEN, and UNTRACED. INV_CalcWeaponDamageRange 0x485240 does three things this does not:
+        // OPEN for 1.14d, and UNTRACED (D2R's MAX is traced and applied in DamageValues).
+        // INV_CalcWeaponDamageRange 0x485240 does three things this does not:
         // it takes *pMax as MAX(mergedMax, mergedMin), then adds stat 272 and a percent of the
         // running total from stat 273, and it reads the merged pair off the UNIT after temporarily
         // attaching the item to it (STATLIST_SetItemStatActive 0x4852a1, restored at 0x4852cb /
@@ -768,6 +901,19 @@ namespace D2ItemToolkit
                 return null;
             }
 
+            // ITEMDESC_Damage 0x1401d100c / 0x1401d1092: the elemental colour once, at the first
+            // number, and the one-number template when the ends agree.
+            if (Resurrected)
+            {
+                return ItemTooltipColor.Marker + "0"
+                       + (damage.Min == damage.Max
+                           ? MarkedTemplate(SectionStringIds.ThrowDamage, damage.Color, damage.Min)
+                           : MarkedTemplate(
+                               SectionStringIds.ThrowDamageRange, damage.Color, damage.Min,
+                               damage.Max))
+                       + Terminator;
+            }
+
             string marker = ItemTooltipColor.Marker + (char)('0' + damage.Color);
 
             var text = new StringBuilder();
@@ -791,9 +937,11 @@ namespace D2ItemToolkit
         /// </summary>
         private bool BarbarianDualWield()
         {
-            return _viewer != null
-                   && _viewer.IsPlayer
-                   && _viewer.ClassId == BarbarianClass
+            // D2R asks the CLIENT player (ITEMDESC_Damage 0x1401d0ea1), not the tooltip's unit.
+            ItemViewer player = Resurrected ? _clientPlayer : _viewer;
+            return player != null
+                   && player.IsPlayer
+                   && player.ClassId == BarbarianClass
                    && _items.GetInt(_item.ClassId, "1or2handed") != 0;
         }
 
@@ -843,6 +991,14 @@ namespace D2ItemToolkit
             int min = Stat(minStat);
             int max = Stat(maxStat);
 
+            // ITEMDESC_GetMinMaxStats 0x1401d0981-0x1401d0987: *pMax = MAX(min, max) on every
+            // line. `dmg-min` raises the throw minimum (stat 159) but no maximum (0x140287f46), so
+            // the throw line and the Barbarian pair, which have no min+1 clamp, can see min > max.
+            if (Resurrected && max < min)
+            {
+                max = min;
+            }
+
             // 0x485931, single-line path only.
             if (clampMax && max <= min + 1)
             {
@@ -870,6 +1026,18 @@ namespace D2ItemToolkit
             // on the marker staying in force from the min. Its flag is also pre-seeded at
             // 0x485a14-0x485a54 from STATLIST_GetStatBonusFromLists on stats 18, 17, 159 and 160,
             // where the 1H/2H flag is zeroed at 0x485662 and never gets those terms.
+            // ITEMDESC_Damage: ÿc0 on the throw label and ONE ÿc3 at the first number, only when
+            // modified (0x1401d15e1 / 0x1401d1608); the 1H/2H line is the same bytes as 1.14d.
+            if (Resurrected)
+            {
+                int color = values.Modified ? ItemTooltipColor.Magic : -1;
+                return throwShape
+                    ? ItemTooltipColor.Marker + "0"
+                      + MarkedTemplate(SectionStringIds.ThrowDamageRange, color, min, max)
+                      + Terminator
+                    : MarkedTemplate(labelId, color, min, max) + Terminator;
+            }
+
             if (throwShape)
             {
                 string throwMarker = ItemTooltipColor.Marker + (values.Modified ? "3" : "0");
@@ -959,6 +1127,11 @@ namespace D2ItemToolkit
 
             int total = Stat(StatToBlock);
 
+            if (Resurrected)
+            {
+                return ResurrectedBlockChance(total);
+            }
+
             if (_viewer != null && _viewer.IsPlayer && _data.CharStats != null
                 && _viewer.ClassId >= 0 && _viewer.ClassId < _data.CharStats.RowCount)
             {
@@ -986,10 +1159,66 @@ namespace D2ItemToolkit
                    + numberMarker + total + Str(DescStringIds.Percent) + Terminator;
         }
 
+        /// <summary>
+        /// ITEMDESC_Blockchance 0x1401d16a0. The CLIENT player supplies BlockFactor and Holy Shield
+        /// with no unit-type test (0x1401d172d), the label lost its own ÿc0, and with no player the
+        /// 75 cap is skipped (0x1401d1738 jumps straight to the zero test).
+        /// </summary>
+        private string ResurrectedBlockChance(int total)
+        {
+            ItemViewer player = _clientPlayer;
+            if (player != null)
+            {
+                if (_data.CharStats != null && player.ClassId >= 0
+                    && player.ClassId < _data.CharStats.RowCount)
+                {
+                    total += _data.CharStats.GetInt(player.ClassId, "BlockFactor");
+                }
+
+                total += HolyShieldUp(player)
+                    ? _skillDamage.ParamWithDiminishing(
+                        SkillDamage.HolyShieldSkillId, player.SkillLevel(SkillDamage.HolyShieldSkillId))
+                    : 0;
+
+                if (total > MaxBlockChance)
+                {
+                    total = MaxBlockChance;
+                }
+            }
+
+            if (total == 0)
+            {
+                return null;
+            }
+
+            int color = total > _items.GetInt(_item.ClassId, "block") ? ItemTooltipColor.Magic : -1;
+            return MarkedTemplate(SectionStringIds.BlockChance, color, total) + Terminator;
+        }
+
         // ItemTypes `Class` restricts the item to one character class; the text is that class's
         // charstats StrClassOnly.
+        // 0x1401d58c5: a word table indexed by ITEMS_GetClassOfClassSpecificItem, which admits
+        // the Warlock (< 8). The texts equal charstats StrClassOnly; 27602 is HD-table only.
+        private static readonly int[] ResurrectedClassOnlyIds =
+        {
+            10917, 10918, 10919, 10920, 10921, 10922, 10923, 27602,
+        };
+
+        private string ResurrectedClassRestriction()
+        {
+            int classId = _requirements.ClassRestriction(_item);
+            return classId >= 0 && classId < ResurrectedClassOnlyIds.Length
+                ? Str(ResurrectedClassOnlyIds[classId]) + Terminator
+                : null;
+        }
+
         private string ClassRestriction()
         {
+            if (Resurrected)
+            {
+                return ResurrectedClassRestriction();
+            }
+
             int row = PrimaryType();
             if (row < 0 || _data.ItemTypes == null)
             {
@@ -1021,7 +1250,136 @@ namespace D2ItemToolkit
         // at 0x48e9a5, so its output is dead in 1.14d.)
         private string QuantityAndSpellDescription()
         {
+            if (Resurrected)
+            {
+                string buffer = ResurrectedSpellDescription(QuantityLine() ?? string.Empty);
+                return buffer.Length == 0 ? null : buffer;
+            }
+
             return SpellDescription() ?? QuantityLine();
+        }
+
+        private const int StatExtraStack = 254;
+        private const int MaxTotalStack = 511;
+
+        /// <summary>ITEMS_GetTotalMaxStack 0x14022b9a0: maxstack + item_extra_stack, capped.</summary>
+        private int TotalMaxStack()
+        {
+            int total = _items.GetInt(_item.ClassId, "maxstack") + Stat(StatExtraStack);
+            return total > MaxTotalStack ? MaxTotalStack : total;
+        }
+
+        /// <summary>
+        /// ITEMDESC_StackableItemDescription 0x1401d2750: the HD "Quantity: %d of %d" takes the
+        /// total max stack as its second number; the legacy "Quantity: %d" ignores it.
+        /// </summary>
+        private string ResurrectedQuantity()
+        {
+            int quantity = Stat(StatQuantity);
+            int maxStack = TotalMaxStack();
+            if (quantity <= 0 && maxStack <= 0)
+            {
+                return null;
+            }
+
+            return Template(SectionStringIds.QuantityLabel, quantity, maxStack) + Terminator;
+        }
+
+        /// <summary>
+        /// LANG_SpellDesc 0x1401d2ae0, run on the quantity buffer. Modes 1 and 3 REPLACE it, 2 and
+        /// 4 APPEND a formatted line, and a non-zero spelldesccolor then prepends a marker to the
+        /// whole buffer (0x1401d2e0d). The inventory hover passes a5 = 3, so bit 1 is set and a quest
+        /// item's mode-1 text shows (0x1401d2d56); no gamepad, so spelldescstr2 is never chosen.
+        /// </summary>
+        private string ResurrectedSpellDescription(string buffer)
+        {
+            int mode = _items.GetInt(_item.ClassId, "spelldesc");
+            TxtFile file = FileFor(_item.ClassId);
+            int row = RowFor(_item.ClassId);
+
+            if (mode == 0 || _clientPlayer == null || file == null || row < 0)
+            {
+                return buffer;
+            }
+
+            int stringId = TxtKeys.Id(file, row, "spelldescstr", _data.Strings);
+            if (stringId == NoSpellDescString)
+            {
+                return buffer;
+            }
+
+            int value;
+            switch (mode)
+            {
+                case 1:
+                    buffer = Str(stringId) + Terminator;
+                    break;
+
+                case 2:
+                case 4:
+                    if (!TrySpellDescValue(file, row, out value))
+                    {
+                        return buffer;
+                    }
+
+                    if (mode == 2)
+                    {
+                        value = ResurrectedPotionValue(file, row, value);
+                    }
+
+                    buffer += Template(stringId, value) + Terminator;
+                    break;
+
+                case 3:
+                    if (!TrySpellDescValue(file, row, out value))
+                    {
+                        return buffer;
+                    }
+
+                    buffer = Str(stringId) + Space
+                             + value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                             + Terminator;
+                    break;
+
+                default:
+                    return buffer;
+            }
+
+            int color = file.GetInt(row, "spelldesccolor");
+            return color != 0 && buffer.Length != 0
+                ? ItemTooltipColor.Marker + ItemTooltipComposer.EncodeColorDigit(color) + buffer
+                : buffer;
+        }
+
+        /// <summary>
+        /// ITEMS_GetBonusLifeBasedOnClass 0x14022ede0 / ITEMS_GetBonusManaBasedOnClass 0x14022eed0:
+        /// the charstats HealthPotionPercent / ManaPotionPercent of the client player's class,
+        /// replacing 1.14d's byte tables. A non-player gets life x2, mana x1.
+        /// </summary>
+        private int ResurrectedPotionValue(TxtFile file, int row, int value)
+        {
+            int stat = _data.ItemStatCost.StatIdForName(file.GetString(row, "stat1").Trim());
+            bool healing = stat == StatHitPoints || stat == StatHpRegen;
+            bool mana = stat == StatMana || stat == StatManaRecovery;
+            if (!healing && !mana)
+            {
+                return value;
+            }
+
+            if (!_clientPlayer.IsPlayer)
+            {
+                return healing ? value * 2 : value;
+            }
+
+            if (_data.CharStats == null || _clientPlayer.ClassId < 0
+                || _clientPlayer.ClassId >= _data.CharStats.RowCount)
+            {
+                return value;
+            }
+
+            int percent = _data.CharStats.GetInt(
+                _clientPlayer.ClassId, healing ? "HealthPotionPercent" : "ManaPotionPercent");
+            return (int)((long)value * percent / 100);
         }
 
         // 0x486160: a stackable item shows the line even at quantity 0, because the gate is
@@ -1033,6 +1391,11 @@ namespace D2ItemToolkit
         /// </summary>
         private string BookQuantity()
         {
+            if (Resurrected)
+            {
+                return ResurrectedQuantity();
+            }
+
             int quantity = Stat(StatQuantity);
 
             if (quantity <= 0 && _items.GetInt(_item.ClassId, "maxstack") <= 0)
@@ -1061,6 +1424,11 @@ namespace D2ItemToolkit
             if (!_item.Has(ItemRecordFlags.Identified) || _item.Has(ItemRecordFlags.Socketed))
             {
                 return null;
+            }
+
+            if (Resurrected)
+            {
+                return ResurrectedQuantity();
             }
 
             int quantity = Stat(StatQuantity);
@@ -1214,9 +1582,14 @@ namespace D2ItemToolkit
         // 0x485dd2 / 0x485dda: the skill must exist on the viewer AND unit state 101 must be up.
         private bool HolyShieldUp()
         {
-            return _viewer != null
-                   && _viewer.ActiveStates.Contains(SkillDamage.HolyShieldState)
-                   && _viewer.SkillLevel(SkillDamage.HolyShieldSkillId) > 0;
+            return HolyShieldUp(_viewer);
+        }
+
+        private static bool HolyShieldUp(ItemViewer unit)
+        {
+            return unit != null
+                   && unit.ActiveStates.Contains(SkillDamage.HolyShieldState)
+                   && unit.SkillLevel(SkillDamage.HolyShieldSkillId) > 0;
         }
 
         private void HolyShieldDamage(out int min, out int max)
@@ -1396,7 +1769,10 @@ namespace D2ItemToolkit
                 return null;
             }
 
-            return Str(SectionStringIds.RunewordOpen) + letters + "'" + Terminator;
+            // D2R loads RuneQuote at BOTH ends (0x1401d2f44 / 0x1401d3034); it is localised, and
+            // empty in frFR HD and zhTW legacy.
+            string close = Resurrected ? Str(SectionStringIds.RunewordOpen) : "'";
+            return Str(SectionStringIds.RunewordOpen) + letters + close + Terminator;
         }
 
         // ITEM_GetItemsTxt_bHasInv 0x629900 reads the items.txt "hasinv" column.
@@ -1413,6 +1789,13 @@ namespace D2ItemToolkit
                 return null;
             }
 
+            // ITEMS_GetWeaponAttackSpeed hard-exits on a null unit (0x14022f0fa), so D2R has no
+            // viewer-less speed word to reproduce; a viewer-less render omits the line.
+            if (Resurrected && _clientPlayer == null)
+            {
+                return null;
+            }
+
             int speed;
             if (!_attackSpeed.TryCalculate(_item, _clientPlayer, _stats, out speed))
             {
@@ -1421,6 +1804,16 @@ namespace D2ItemToolkit
 
             // word_721E88 holds 4088..4093 at stride 6.
             int speedWord = SectionStringIds.FirstSpeedWord + SpeedBucket(speed);
+
+            // ITEMDESC_AttackSpeed_WeaponClass 0x1401d2a60: the class string is a template that
+            // takes the speed word, so `tpot`'s "Equip to Throw" (no %s) drops it entirely.
+            if (Resurrected)
+            {
+                string word = (Bonus(StatFasterAttackRate) != 0 ? ItemTooltipColor.Marker + "3" : string.Empty)
+                              + Str(speedWord);
+                int classString = WeaponClassStringId();
+                return (classString < 0 ? word : Template(classString, word)) + Terminator;
+            }
 
             var text = new StringBuilder();
 
@@ -1601,10 +1994,65 @@ namespace D2ItemToolkit
 
         private string GemLetter(int classId)
         {
-            return _gemTable.Letter(_gemTable.RowForRuneClassId(classId));
+            string letter = _gemTable.Letter(_gemTable.RowForRuneClassId(classId));
+
+            // ITEMDESC_InventorySocketFillerDescription 0x1401d2fad: the cell is a string KEY looked
+            // up at render time, and the raw cell, cut to five characters, is copied only when the
+            // result POINTER equals the one strMissingString's own lookup returns. A miss returns
+            // g_pStringTable, a copy (0x140477a5c) that no node shares, so a missing key prints the
+            // missing-string text; the raw cut needs the key itself, or both keys missing.
+            if (Resurrected && !string.IsNullOrEmpty(letter))
+            {
+                bool samePointer = _data.Strings.HasKey(letter)
+                    ? letter == JsonStringTable.MissingStringKey
+                    : !_data.Strings.HasKey(JsonStringTable.MissingStringKey);
+                return samePointer
+                    ? (letter.Length > 5 ? letter.Substring(0, 5) : letter)
+                    : _data.Strings.GetByKey(letter);
+            }
+
+            return letter;
+        }
+
+        private const int FirstBeltRows = 7;
+        private const int DefaultBeltRow = 2;
+
+        /// <summary>
+        /// D2R's belt-size line (ITEMS_GetFullDescription 0x1401d57f6): an item whose PRIMARY type
+        /// is exactly `belt`, with items `belt` below 7, gets numboxes over the `default` belt
+        /// (belts row 2), formatted "%+d" and skipped when zero. No identified gate.
+        /// </summary>
+        private string BeltSize()
+        {
+            if (!Resurrected || _data.Belts == null || PrimaryType() != _types.Row("belt"))
+            {
+                return null;
+            }
+
+            int belt = _items.GetInt(_item.ClassId, "belt") & 0xFF;
+            if (belt >= FirstBeltRows || belt >= _data.Belts.RowCount)
+            {
+                return null;
+            }
+
+            int extra = _data.Belts.GetInt(belt, "numboxes")
+                        - _data.Belts.GetInt(DefaultBeltRow, "numboxes");
+            if (extra == 0)
+            {
+                return null;
+            }
+
+            return CFormat.Sprintf(_data.Strings.GetByKey(SectionStringIds.BeltStorageKey), extra)
+                   + Terminator;
         }
 
         private string WeaponClassName()
+        {
+            int id = WeaponClassStringId();
+            return id < 0 ? null : Str(id);
+        }
+
+        private int WeaponClassStringId()
         {
             int type = PrimaryType();
 
@@ -1612,11 +2060,11 @@ namespace D2ItemToolkit
             {
                 if (_types.IsOfType(type, SecondaryType(), _types.Row(entry.Key)))
                 {
-                    return Str(entry.Value);
+                    return entry.Value;
                 }
             }
 
-            return null;
+            return -1;
         }
 
         // unk_721EB0, scanned in order; first match wins. Six bytes per entry: an itemtypes ROW at
@@ -1654,6 +2102,12 @@ namespace D2ItemToolkit
         // dword_722078, indexed by classId*2 + (bow or crossbow ? 1 : 0).
         private static readonly byte[] ClassSpeedOffset = { 0, 2, 1, 4, 1, 4, 0, 3, 0, 3, 1, 4, 0, 3 };
 
+        // unk_14156DBD0 carries an eighth pair for the Warlock.
+        private static readonly byte[] ResurrectedClassSpeedOffset =
+        {
+            0, 2, 1, 4, 1, 4, 0, 3, 0, 3, 1, 4, 0, 3, 0, 3,
+        };
+
         // 0x48622f / 0x48623d bracket the table: 28 and over is bucket 5 outright, under 10 is
         // bucket 1, and only 10..27 index dword_721F10.
         private int SpeedBucket(int speed)
@@ -1671,7 +2125,8 @@ namespace D2ItemToolkit
             int classId = ViewerClassId();
             int offset = classId < 0
                 ? NoViewerSpeedOffset
-                : ClassSpeedOffset[(classId * 2) + (RangedWeapon() ? 1 : 0)];
+                : (Resurrected ? ResurrectedClassSpeedOffset : ClassSpeedOffset)[
+                    (classId * 2) + (RangedWeapon() ? 1 : 0)];
 
             int index = (5 * (speed - 10)) + offset;
 
@@ -1698,7 +2153,7 @@ namespace D2ItemToolkit
         private int ViewerClassId()
         {
             int classId = _clientPlayer != null && _clientPlayer.IsPlayer ? _clientPlayer.ClassId : -1;
-            return classId >= 0 && classId <= 6 ? classId : -1;
+            return classId >= 0 && classId <= (Resurrected ? 7 : 6) ? classId : -1;
         }
 
         private TxtFile FileFor(int classId)

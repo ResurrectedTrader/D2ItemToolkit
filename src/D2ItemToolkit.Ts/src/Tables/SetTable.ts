@@ -1,4 +1,4 @@
-import type { TblStringTable } from '../Data/TblFile.js';
+import type { StringTable } from '../Data/StringTable.js';
 import type { TxtFile } from '../Data/TxtFile.js';
 import type { ItemProperty } from '../Stats/PropertyApplier.js';
 import { TxtKeys } from './TxtDataProviders.js';
@@ -82,7 +82,7 @@ export class SetTable {
   private readonly setsTxt: TxtFile | null;
   private propertyIds: ((code: string) => number) | null = null;
 
-  constructor(sets: TxtFile | null, setItems: TxtFile | null, strings: TblStringTable) {
+  constructor(sets: TxtFile | null, setItems: TxtFile | null, strings: StringTable) {
     this.setsTxt = sets;
 
     const setCount = sets === null ? 0 : sets.rowCount;

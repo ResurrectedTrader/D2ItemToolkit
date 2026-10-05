@@ -115,6 +115,12 @@ static void __fastcall ITEMSTATS_StoreUnitIdentity(nlohmann::json& jUnit, D2Unit
 				});
 
 			jUnit[Skills] = std::move(jSkills);
+
+			// D2R's throwing mastery arm keys off it (0x14024d3d0). Omitted when NULL: 0 is Attack.
+			if (pUnit->pSkills->pUsedSkill && pUnit->pSkills->pUsedSkill->pSkillsTxt)
+			{
+				jUnit[LastUsedSkill] = pUnit->pSkills->pUsedSkill->pSkillsTxt->nSkillId;
+			}
 		}
 
 		return;

@@ -1,7 +1,7 @@
 {
   "name": "d2itemtoolkit",
   "version": "0.0.0",
-  "description": "Diablo II 1.14d item description engine, reimplemented from the disassembly. Renders the exact tooltip the game would draw, with the shipped tables embedded so it works with no game install.",
+  "description": "Diablo II item description engine for 1.14d and Diablo II: Resurrected (including Reign of the Warlock), reimplemented from the disassembly. Renders the exact tooltip the game would draw, with the shipped tables embedded so it works with no game install.",
   "keywords": [
     "diablo2",
     "diablo-ii",

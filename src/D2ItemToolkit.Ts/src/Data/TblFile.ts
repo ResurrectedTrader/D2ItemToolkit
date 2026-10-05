@@ -1,3 +1,4 @@
+import { StringTable } from './StringTable.js';
 const HEADER_LENGTH = 21;
 const NODE_LENGTH = 17;
 
@@ -140,7 +141,7 @@ function readCString(bytes: Uint8Array, offset: number, maxBytes: number): strin
  *  - with no expansionstring table the id is REWRITTEN to 11078 (0x524a44) and re-tested;
  *  - the base table is asked for the id UNCHANGED (0x524ab8), not id - 10000.
  */
-export class TblStringTable {
+export class TblStringTable extends StringTable {
   static readonly PatchBase = 10000;
   static readonly ExpansionBase = 20000;
   static readonly MissingStringId = 11078;
@@ -149,7 +150,9 @@ export class TblStringTable {
     private readonly base: TblFile | null,
     private readonly patch: TblFile | null,
     private readonly expansion: TblFile | null,
-  ) {}
+  ) {
+    super();
+  }
 
   getByIndex(index: number): string | null {
     let id = index;
@@ -209,6 +212,11 @@ export class TblStringTable {
   resolveKey(key: string): number {
     const index = key.length === 0 ? -1 : this.getIndexByKey(key);
     return index > 0 ? index : DESC_STR2_SENTINEL;
+  }
+
+  getByKey(key: string): string | null {
+    const index = this.getIndexByKey(key);
+    return index >= 0 ? this.getByIndex(index) : null;
   }
 }
 

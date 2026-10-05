@@ -40,7 +40,7 @@ namespace D2ItemToolkit
         private readonly TxtFile _setsTxt;
         private Func<string, int> _propertyIds;
 
-        public SetTable(TxtFile sets, TxtFile setItems, TblStringTable strings)
+        public SetTable(TxtFile sets, TxtFile setItems, StringTable strings)
         {
             if (strings == null) throw new ArgumentNullException("strings");
 

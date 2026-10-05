@@ -524,6 +524,7 @@ export class SetItemTooltipBuilder {
       this.data.monsterTypes,
       null,
       false,
+      this.data.isResurrected,
     );
 
     return generator.join(generator.describe(tier));

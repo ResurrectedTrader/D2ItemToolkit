@@ -1,3 +1,5 @@
+import { GameVariant } from './GameVariant.js';
+
 /**
  * A tab-separated game table, parsed the way the game's own compiler parses it rather than the way
  * a modern CSV reader would. Every deviation below is deliberate and cited.
@@ -38,20 +40,22 @@ export class TxtFile {
 
   private static readonly MaxHeaderFields = 280;
 
+  private static readonly ResurrectedMaxHeaderFields = 350;
+
   /**
    * The compiler tokenizes RAW BYTES (0x6bd714 `mov al,[esi]`) and never decodes anything, so each
    * byte must survive as one char. Decoding as UTF-8 would fold every invalid byte to U+FFFD:
    * objects.txt (two 0x85) and UniqueItems.txt (one 0x92, in "Hunter's Bow") both contain bytes
    * that are not valid UTF-8. `latin1` is the one-byte-one-char mapping we need.
    */
-  static load(bytes: Uint8Array): TxtFile {
+  static load(bytes: Uint8Array, variant: GameVariant = GameVariant.Lod114d): TxtFile {
     let text = '';
     const chunk = 0x8000;
     for (let i = 0; i < bytes.length; i += chunk) {
       text += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
     }
 
-    return TxtFile.parse(text);
+    return TxtFile.parse(text, variant);
   }
 
   private static splitCells(line: string): string[] {
@@ -65,7 +69,13 @@ export class TxtFile {
     return line.split('\t');
   }
 
-  static parse(content: string): TxtFile {
+  static parse(content: string, variant: GameVariant = GameVariant.Lod114d): TxtFile {
+    // D2R's tokeniser (sub_140760c70) also ends a row on a bare LF (0x140760d7a) and allows 350
+    // header fields (0x140760dcf). Every shipped D2R file is CRLF throughout.
+    if (variant !== GameVariant.Lod114d) {
+      content = content.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n');
+    }
+
     // Rows terminate on CRLF and ONLY CRLF. The scanner tests just TAB (0x6bd718) and CR
     // (0x6bd722), and a CR must be followed by LF or it halts (0x6bd733). 0x0A matches neither, so
     // a bare LF is ordinary CELL CONTENT. Splitting on '\n' would let one stray byte split a row
@@ -77,10 +87,13 @@ export class TxtFile {
 
     // 0x6bd6f6 `cmp eax, 118h` / 0x6bd6fb `jbe`: more than 280 header fields halts the game
     // (error 0x67). The column map is a _WORD[280]. Shipped maximum is skills.txt at 256.
-    if (header.length > TxtFile.MaxHeaderFields) {
+    const limit =
+      variant === GameVariant.Lod114d
+        ? TxtFile.MaxHeaderFields
+        : TxtFile.ResurrectedMaxHeaderFields;
+    if (header.length > limit) {
       throw new Error(
-        `Malformed .txt: ${header.length} header fields exceeds the loader's limit of ` +
-          `${TxtFile.MaxHeaderFields} (the game halts at 0x6bd6fd).`,
+        `Malformed .txt: ${header.length} header fields exceeds the loader's limit of ${limit}.`,
       );
     }
 

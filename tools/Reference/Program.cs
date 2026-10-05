@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 
@@ -13,33 +14,64 @@ namespace D2ItemToolkit.Tools
     /// record rather than to the implementation as a whole.
     ///
     /// Usage:
-    ///   Reference &lt;corpus.json&gt; &lt;out.json&gt;
+    ///   Reference &lt;corpus.json&gt; &lt;out.json&gt; [variant]
+    ///
+    /// The variant (default Lod114d) picks the embedded tables, so the same tool produces the D2R
+    /// reference from a D2R corpus.
     ///
     /// The corpus is an array of cases; each case is `{ "name", "record", "player"? }` where
     /// `record` and `player` are unit documents in the capture format.
     /// </summary>
     public static class Program
     {
-        private static readonly D2DataFiles Data = D2DataFiles.LoadEmbedded();
-
-        private static readonly ItemTable Items = new ItemTable(
-            Data.Weapons, Data.Armor, Data.Misc);
-
-        private static readonly ItemTypeTree Types = new ItemTypeTree(Data.ItemTypes);
-
-        private static readonly SetTable Sets = new SetTable(
-            Data.Sets, Data.SetItems, Data.Strings);
-
-        private static readonly RolledRangeReconstructor Ranges = new RolledRangeReconstructor(
-            Data, Items, Types, new MagicAffixTable(Data), Sets);
+        // Set once in Main from the optional variant argument; every case renders against it.
+        private static D2DataFiles Data;
+        private static ItemTable Items;
+        private static ItemTypeTree Types;
+        private static SetTable Sets;
+        private static RolledRangeReconstructor Ranges;
 
         // The facade, for the two layers that exist to police the OPT-IN render modes. Those route
         // by tooltip kind, which the hand-built path below deliberately does itself — reusing the
         // engine keeps this from re-implementing that routing a second time.
-        private static readonly TooltipEngine Engine = TooltipEngine.FromData(Data);
+        private static TooltipEngine Engine;
 
-        private static readonly SocketStatSynthesis SocketStats =
-            new SocketStatSynthesis(Data, Items, Types);
+        private static SocketStatSynthesis SocketStats;
+
+        private static readonly string[] SlimLayers = { "name", "sections", "rendered", "colored", "error" };
+
+        private static string Slim(string payload)
+        {
+            using (JsonDocument document = JsonDocument.Parse(payload))
+            {
+                var parts = new List<string>();
+                foreach (string layer in SlimLayers)
+                {
+                    JsonElement value;
+                    if (document.RootElement.TryGetProperty(layer, out value))
+                    {
+                        parts.Add(Quote(layer) + ": " + value.GetRawText());
+                    }
+                }
+
+                return "{ " + string.Join(", ", parts) + " }";
+            }
+        }
+
+        private static void LoadTables(GameVariant variant, string language, bool legacy)
+        {
+            Data = D2DataFiles.LoadEmbedded(
+                variant,
+                language == null && !legacy
+                    ? null
+                    : new ResurrectedTextOptions { Language = language ?? "enUS", LegacyGraphics = legacy });
+            Items = new ItemTable(Data.Weapons, Data.Armor, Data.Misc);
+            Types = new ItemTypeTree(Data.ItemTypes);
+            Sets = new SetTable(Data.Sets, Data.SetItems, Data.Strings);
+            Ranges = new RolledRangeReconstructor(Data, Items, Types, new MagicAffixTable(Data), Sets);
+            Engine = TooltipEngine.FromData(Data);
+            SocketStats = new SocketStatSynthesis(Data, Items, Types);
+        }
 
         private static void AddInto(
             IDictionary<int, int> into, IEnumerable<KeyValuePair<int, int>> from)
@@ -55,25 +87,78 @@ namespace D2ItemToolkit.Tools
 
         public static int Main(string[] args)
         {
-            if (args.Length < 2)
+            // Reference d2r-suite <rotw-corpus.json> <base-corpus.json> <outDir>: every D2R reference
+            // the TypeScript differential replays, in one run.
+            if (args.Length == 4 && args[0] == "d2r-suite")
             {
-                Console.Error.WriteLine("usage: Reference <corpus.json> <out.json>");
+                return WriteSuite(args[1], args[2], args[3]);
+            }
+
+            // Reference <corpus> <out> [variant [locale [legacy|hd [slim]]]]. `slim` keeps only the
+            // text layers, which is all a locale changes, so 13 locales do not cost 13 full references.
+            GameVariant variant = GameVariant.Lod114d;
+            if (args.Length < 2 || (args.Length > 2 && !Enum.TryParse(args[2], out variant)))
+            {
+                Console.Error.WriteLine(
+                    "usage: Reference <corpus.json> <out.json> [variant [locale [legacy|hd [slim]]]]");
                 return 2;
             }
 
-            using (JsonDocument corpus = JsonDocument.Parse(File.ReadAllText(args[0])))
+            WriteReference(
+                args[0], args[1], variant, args.Length > 3 ? args[3] : null,
+                args.Length > 4 && args[4] == "legacy", args.Length > 5 && args[5] == "slim");
+            return 0;
+        }
+
+        private static readonly string[] Locales =
+        {
+            "enUS", "deDE", "esES", "frFR", "itIT", "koKR", "plPL", "ruRU", "zhCN", "zhTW", "esMX",
+            "jaJP", "ptBR",
+        };
+
+        private static int WriteSuite(string rotwCorpus, string baseCorpus, string outDir)
+        {
+            WriteReference(rotwCorpus, Path.Combine(outDir, "d2r-rotw-expected.json"),
+                GameVariant.ReignOfTheWarlock, null, false, false);
+            WriteReference(baseCorpus, Path.Combine(outDir, "d2r-base-expected.json"),
+                GameVariant.Resurrected, null, false, false);
+
+            foreach (string locale in Locales)
+            {
+                foreach (bool legacy in new[] { false, true })
+                {
+                    string file = "d2r-rotw-" + locale + (legacy ? "-legacy" : string.Empty) + ".json";
+                    WriteReference(rotwCorpus, Path.Combine(outDir, "locales", file),
+                        GameVariant.ReignOfTheWarlock, locale, legacy, true);
+                }
+            }
+
+            return 0;
+        }
+
+        private static void WriteReference(
+            string corpusPath, string outPath, GameVariant variant, string language, bool legacy, bool slim)
+        {
+            LoadTables(variant, language, legacy);
+
+            using (JsonDocument corpus = JsonDocument.Parse(File.ReadAllText(corpusPath)))
             {
                 var results = new List<string>();
 
                 foreach (JsonElement testCase in corpus.RootElement.EnumerateArray())
                 {
-                    results.Add(Render(testCase));
+                    string rendered = Render(testCase);
+                    results.Add(slim ? Slim(rendered) : rendered);
                 }
 
-                File.WriteAllText(args[1], "[\n  " + string.Join(",\n  ", results) + "\n]\n");
-            }
+                string directory = Path.GetDirectoryName(outPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
 
-            return 0;
+                File.WriteAllText(outPath, "[\n  " + string.Join(",\n  ", results) + "\n]\n");
+            }
         }
 
         /// <summary>
@@ -122,7 +207,14 @@ namespace D2ItemToolkit.Tools
                 AddInto(stats, synthesised);
                 AddInto(modifierStats, synthesised);
 
+                var preOp = new Dictionary<int, int>(stats);
                 ItemStatOps.Resolve(stats, baseStats, Data.ItemStatCost);
+
+                // Mirrors TooltipEngine.Compose's D2R ops 4/5 against the viewer (0x14020c57d).
+                if (Data.IsResurrected && viewer != null && (viewer.UnitType == 0 || viewer.UnitType == 1))
+                {
+                    ItemStatOps.ResolveLevelScaled(stats, preOp, Data.ItemStatCost.LevelScaledEntries, viewer.Stat);
+                }
 
                 payload.Append(", \"views\": {")
                     .Append("\"equipped\": ").Append(Pack(stats))
@@ -171,7 +263,11 @@ namespace D2ItemToolkit.Tools
                 var composer = new ItemTooltipComposer(
                     sections, sections.CreateModifierGenerator(modifierStats));
 
-                ItemTooltipContext context = sections.CreateContext();
+                // Game state, not unit state, so it is carried on the case rather than derived.
+                JsonElement difficulty, desecrated;
+                ItemTooltipContext context = sections.CreateContext(
+                    testCase.TryGetProperty("difficulty", out difficulty) ? difficulty.GetInt32() : 0,
+                    testCase.TryGetProperty("desecratedZones", out desecrated) && desecrated.GetBoolean());
 
                 // Game state, not unit state, so it is carried on the case rather than derived.
                 JsonElement shopMode;
@@ -184,7 +280,10 @@ namespace D2ItemToolkit.Tools
                 payload.Append(", \"kind\": ").Append(Quote(kind.ToString()));
 
                 IReadOnlyList<ItemTooltipLine> lines;
-                int maxLength = ItemTooltipComposer.MaxTooltipLength;
+                // D2R grows its result and never cuts it (0x1401d654c).
+                int maxLength = Data.IsResurrected
+                    ? ItemTooltipComposer.UnlimitedTooltipLength
+                    : ItemTooltipComposer.MaxTooltipLength;
 
                 if (kind == ItemTooltipKind.IdentifiedSetItem)
                 {
@@ -441,17 +540,7 @@ namespace D2ItemToolkit.Tools
 
         private static string PackRanges(ItemRollRanges ranges)
         {
-            var stats = new List<string>();
-            foreach (RolledStatRange range in ranges.Stats)
-            {
-                stats.Add("{\"stat\": " + range.StatId
-                    + ", \"layer\": " + range.Layer
-                    + ", \"low\": " + range.Low
-                    + ", \"high\": " + range.High
-                    + ", \"displayLow\": " + range.DisplayLow
-                    + ", \"displayHigh\": " + range.DisplayHigh
-                    + ", \"sources\": " + (int)range.Sources + "}");
-            }
+            var stats = PackStatRanges(ranges.Stats);
 
             var layers = new List<string>();
             foreach (RolledLayerRange range in ranges.LayerVaries)
@@ -471,7 +560,56 @@ namespace D2ItemToolkit.Tools
                 + "], \"unsupportedFuncs\": [" + string.Join(", ", ranges.UnsupportedFuncs)
                 + "], \"craftedRecipeUnknown\": "
                 + (ranges.CraftedRecipeUnknown ? "true" : "false")
-                + ", \"craftedRecipe\": " + ranges.CraftedRecipe + "}";
+                + ", \"craftedRecipe\": " + ranges.CraftedRecipe
+                + ", \"choices\": [" + string.Join(", ", ranges.Choices.Select(PackChoice)) + "]}";
+        }
+
+        private static List<string> PackStatRanges(IEnumerable<RolledStatRange> ranges)
+        {
+            var stats = new List<string>();
+            foreach (RolledStatRange range in ranges)
+            {
+                stats.Add("{\"stat\": " + range.StatId
+                    + ", \"layer\": " + range.Layer
+                    + ", \"low\": " + range.Low
+                    + ", \"high\": " + range.High
+                    + ", \"displayLow\": " + range.DisplayLow
+                    + ", \"displayHigh\": " + range.DisplayHigh
+                    + ", \"sources\": " + (int)range.Sources + "}");
+            }
+
+            return stats;
+        }
+
+        private static string PackChoice(RolledChoice choice)
+        {
+            var options = choice.Options.Select(option =>
+                "{\"entry\": " + option.Entry
+                + ", \"propertyId\": " + option.PropertyId
+                + ", \"code\": " + Quote(option.Code ?? string.Empty)
+                + ", \"weight\": " + option.Weight
+                + ", \"paramLow\": " + option.ParamLow
+                + ", \"paramHigh\": " + option.ParamHigh
+                + ", \"min\": " + option.Min
+                + ", \"max\": " + option.Max
+                + ", \"variants\": [" + string.Join(", ", option.Variants.Select(variant =>
+                    "{\"param\": " + variant.Param
+                    + ", \"stats\": [" + string.Join(", ", PackStatRanges(variant.Stats)) + "]}"))
+                + "], \"nested\": " + (option.Nested == null ? "null" : PackChoice(option.Nested)) + "}");
+
+            var consistent = choice.Consistent.Select(outcome =>
+                "[" + string.Join(", ", outcome.Select(pick =>
+                    "{\"option\": " + pick.Option + ", \"param\": " + pick.Param + "}")) + "]");
+
+            return "{\"groupRow\": " + choice.GroupRow
+                + ", \"code\": " + Quote(choice.Code ?? string.Empty)
+                + ", \"sources\": " + (int)choice.Sources
+                + ", \"pickMode\": " + (int)choice.PickMode
+                + ", \"countLow\": " + choice.CountLow
+                + ", \"countHigh\": " + choice.CountHigh
+                + ", \"resolution\": " + (int)choice.Resolution
+                + ", \"options\": [" + string.Join(", ", options)
+                + "], \"consistent\": [" + string.Join(", ", consistent) + "]}";
         }
 
         private static string Pack(SortedDictionary<int, int> view)

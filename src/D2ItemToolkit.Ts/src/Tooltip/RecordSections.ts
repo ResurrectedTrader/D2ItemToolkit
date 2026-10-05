@@ -1,4 +1,5 @@
 import { AttackSpeedCalculator } from './AttackSpeedCalculator.js';
+import { CFormat } from '../Description/CFormat.js';
 import { EquipRequirements } from './EquipRequirements.js';
 import { GemTable } from '../Tables/GemTable.js';
 import {
@@ -18,9 +19,11 @@ import type { ItemTable } from '../Tables/ItemTable.js';
 import {
   type IItemTooltipSections,
   ItemTooltipColor,
+  ItemTooltipComposer,
   ItemTooltipContext,
   ItemTooltipSection,
 } from './ItemTooltip.js';
+import { UsageCondition } from './UsageCondition.js';
 import type { ItemTypeTree } from '../Tables/ItemTypeTree.js';
 import { type MissileThrowDamage, MissileTable } from '../Tables/MissileTable.js';
 import { type ItemProperty, PropertyApplier } from '../Stats/PropertyApplier.js';
@@ -28,6 +31,7 @@ import { RequiredLevelCalculator } from './RequiredLevelCalculator.js';
 import { SkillDamage } from '../Tables/SkillDamage.js';
 import { SynthesisedStatValues } from '../Stats/SynthesisedStatValues.js';
 import type { TxtFile } from '../Data/TxtFile.js';
+import { MISSING_STRING_KEY } from '../Data/JsonStringTable.js';
 import { type D2DataFiles, TxtKeys } from '../Tables/TxtDataProviders.js';
 import { DescStringIds, isNullOrEmpty } from '../Types.js';
 
@@ -43,6 +47,11 @@ export const SectionStringIds = {
   SmiteDamage: 3468, // "Smite Damage:"
   RequiredLevel: 3469, // "Required Level:"
   EtherealCannotBeRepaired: 22745,
+
+  // D2R templates with no 1.14d counterpart.
+  EtherealSocketed: 23049, // "Ethereal (Cannot be Repaired), Socketed (%i)"
+  ThrowDamageRange: 23050, // "Throw Damage: %d to %d"
+  BeltStorageKey: 'BeltStorageModifierInfo',
   KickDamage: 21782,
   OneHandDamage: 3465, // "One-Hand Damage:"
   TwoHandDamage: 3466, // "Two-Hand Damage:"
@@ -206,6 +215,25 @@ const SpeedBuckets: readonly number[] = [
 // dword_722078, indexed by classId*2 + (bow or crossbow ? 1 : 0).
 const ClassSpeedOffset: readonly number[] = [0, 2, 1, 4, 1, 4, 0, 3, 0, 3, 1, 4, 0, 3];
 
+// unk_14156DBD0 carries an eighth pair for the Warlock.
+const ResurrectedClassSpeedOffset: readonly number[] = [
+  0, 2, 1, 4, 1, 4, 0, 3, 0, 3, 1, 4, 0, 3, 0, 3,
+];
+
+// 0x1401d58c5: a word table indexed by ITEMS_GetClassOfClassSpecificItem, which admits the
+// Warlock (< 8). The texts equal charstats StrClassOnly; 27602 is HD-table only.
+const ResurrectedClassOnlyIds: readonly number[] = [
+  10917, 10918, 10919, 10920, 10921, 10922, 10923, 27602,
+];
+
+const ResurrectedQuestColor = 14;
+
+const StatExtraStack = 254;
+const MaxTotalStack = 511;
+
+const FirstBeltRows = 7;
+const DefaultBeltRow = 2;
+
 // dword_722078 is indexed by 2*classId, and with no player unit the class id is -1
 // (0x486274). Index -2 and -1 read the last two dwords of dword_721F10, which are both 5, so
 // a viewer-less tooltip behaves as though the offset were 5.
@@ -228,6 +256,9 @@ export class RecordSections implements IItemTooltipSections {
   // createContext must run first — every path builds the context before composing, and a caller
   // that skips it gets difficulty 0, which is what a viewerless render meant anyway.
   private difficulty = 0;
+
+  // D2R only: the game's desecrated-zones switch, read by UsageConditionCalc.
+  private desecratedZones = false;
   private readonly stats: Map<number, number>;
   private readonly names: ItemNameBuilder;
   private readonly sockets: Map<number, number>;
@@ -309,6 +340,7 @@ export class RecordSections implements IItemTooltipSections {
       this.data.monsterTypes,
       null,
       true,
+      this.data.isResurrected,
     );
   }
 
@@ -340,8 +372,9 @@ export class RecordSections implements IItemTooltipSections {
    * The composer's context for this item. `difficulty` is GetDificulity() (0x48cb38), the one
    * input that is game state rather than unit state.
    */
-  createContext(difficulty = 0): ItemTooltipContext {
+  createContext(difficulty = 0, desecratedZones = false): ItemTooltipContext {
     this.difficulty = difficulty;
+    this.desecratedZones = desecratedZones;
 
     const context = new ItemTooltipContext();
     context.quality = this.item.quality;
@@ -370,6 +403,15 @@ export class RecordSections implements IItemTooltipSections {
     // items.txt nQuest +0x12A and nQuestDiffCheck +0x12B (0x48cb0b / 0x48cb19).
     context.isQuestItem = this.items.getInt(this.item.classId, 'quest') !== 0;
     context.isWirtsLeg = this.paddedCode(this.item.classId) === WirtsLegCode;
+
+    context.isResurrected = this.resurrected;
+    context.viewerIsPlayer = this.viewer !== null && this.viewer.isPlayer;
+    context.isEventItem = this.items.getInt(this.item.classId, 'EventItem') !== 0;
+    context.isRune = this.types.isOfType(
+      this.primaryType(),
+      this.secondaryType(),
+      this.types.row('rune'),
+    );
     return context;
   }
 
@@ -511,6 +553,8 @@ export class RecordSections implements IItemTooltipSections {
         return this.attackSpeedLine();
       case ItemTooltipSection.SocketFillerDescription:
         return this.socketFillerDescription();
+      case ItemTooltipSection.BeltSize:
+        return this.beltSize();
       default:
         return null;
     }
@@ -527,6 +571,10 @@ export class RecordSections implements IItemTooltipSections {
    * which is why this is text rather than a section colour.
    */
   private questNameColorPrefix(): string {
+    if (this.resurrected) {
+      return this.resurrectedNameColorPrefix();
+    }
+
     if (this.items.getInt(this.item.classId, 'quest') === 0) {
       return '';
     }
@@ -539,6 +587,70 @@ export class RecordSections implements IItemTooltipSections {
     }
 
     return this.paddedCode(this.item.classId) === WirtsLegCode ? '' : ItemTooltipColor.Marker + '4';
+  }
+
+  /**
+   * ITEMS_GetName's colour tail, 0x14015853e-0x1401592ab. The difficulty test is `!=`
+   * (0x140158597), not 1.14d's `<`; the normal quest colour is 14; and a failed UsageConditionCalc
+   * then prepends red OUTSIDE the quest marker, which still paints.
+   */
+  private resurrectedNameColorPrefix(): string {
+    let prefix = '';
+
+    if (this.items.getInt(this.item.classId, 'quest') !== 0) {
+      if (
+        this.items.getInt(this.item.classId, 'questdiffcheck') !== 0 &&
+        this.stat(StatQuestDifficulty) !== this.difficulty
+      ) {
+        prefix = ItemTooltipColor.Marker + '1';
+      } else if (this.paddedCode(this.item.classId) !== WirtsLegCode) {
+        prefix =
+          ItemTooltipColor.Marker + ItemTooltipComposer.encodeColorDigit(ResurrectedQuestColor);
+      }
+    }
+
+    const file = this.fileFor(this.item.classId);
+    const row = this.rowFor(this.item.classId);
+    if (file !== null && row >= 0 && file.hasColumn('UsageConditionCalc')) {
+      const usable = UsageCondition.tryEvaluate(
+        file.getString(row, 'UsageConditionCalc'),
+        this.difficulty,
+        this.desecratedZones,
+      );
+      if (usable === 0) {
+        prefix = ItemTooltipColor.Marker + '1' + prefix;
+      }
+    }
+
+    return prefix;
+  }
+
+  private get resurrected(): boolean {
+    return this.data.isResurrected;
+  }
+
+  // D2R's writers sprintf the numbers into the string (SYSTEM_FormatStringBuff 0x14014f1f0).
+  private template(id: number, ...args: unknown[]): string {
+    return CFormat.sprintf(this.str(id), ...args);
+  }
+
+  /**
+   * D2R colours a number by calling ApplyColorCode on `strstr(template, "%d")` before formatting
+   * (needle at 0x14162ce38), so the marker lands in front of the FIRST `%d` and stays in force to
+   * the end of the line. A template with no `%d` gets none.
+   */
+  private markedTemplate(id: number, color: number, ...args: unknown[]): string {
+    let template = this.str(id);
+    const at = color < 0 ? -1 : template.indexOf('%d');
+    if (at >= 0) {
+      template =
+        template.substring(0, at) +
+        ItemTooltipColor.Marker +
+        ItemTooltipComposer.encodeColorDigit(color) +
+        template.substring(at);
+    }
+
+    return CFormat.sprintf(template, ...args);
   }
 
   private str(id: number): string {
@@ -565,6 +677,21 @@ export class RecordSections implements IItemTooltipSections {
 
     if (!ethereal && !socketed) {
       return null;
+    }
+
+    // ITEMDESC_SocketsAndEthereality 0x1401d0090: one template per combination. With ENG text the
+    // bytes equal the 1.14d concatenation below.
+    if (this.resurrected) {
+      const count = this.stat(StatSockets) & 0xff;
+      if (ethereal && socketed) {
+        return this.template(SectionStringIds.EtherealSocketed, count) + this.terminator;
+      }
+
+      return (
+        (socketed
+          ? this.template(SectionStringIds.Socketed, count)
+          : this.template(SectionStringIds.EtherealCannotBeRepaired)) + this.terminator
+      );
     }
 
     let text = '';
@@ -612,6 +739,15 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
+    // ITEMDESC_Durability 0x1401d051b formats (cur, max) and nothing else: D2R dropped the colour-3
+    // marker 1.14d puts on an enhanced max.
+    if (this.resurrected) {
+      return (
+        this.template(SectionStringIds.DurabilityLabel, this.stat(StatDurability), max) +
+        this.terminator
+      );
+    }
+
     // 0x484f0b: STATLIST_GetStatBonusFromLists is merged-minus-base (0x625570), and the
     // marker goes on the MAX number alone (0x484fc6) — the current value never carries one.
     const marker = this.bonus(StatMaxDurabilityPercent) !== 0 ? ItemTooltipColor.Marker + '3' : '';
@@ -647,7 +783,9 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
-    return this.str(SectionStringIds.RequiredLevel) + this.space + String(level) + this.terminator;
+    return this.resurrected
+      ? this.template(SectionStringIds.RequiredLevel, level) + this.terminator
+      : this.str(SectionStringIds.RequiredLevel) + this.space + String(level) + this.terminator;
   }
 
   // 0x4850a0 / 0x485170. The caller skips the section when the BASE requirement is 0
@@ -658,12 +796,14 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
-    const total = this.requirements.requirement(this.item, column, this.stats);
+    const total = this.requirements.requirement(this.item, column, this.stats, this.viewer);
     if (total <= 0) {
       return null;
     }
 
-    return this.str(labelId) + this.space + String(total) + this.terminator;
+    return this.resurrected
+      ? this.template(labelId, total) + this.terminator
+      : this.str(labelId) + this.space + String(total) + this.terminator;
   }
 
   // 0x485ee0. The by-time contributions are already folded into the runtime value when the
@@ -680,7 +820,20 @@ export class RecordSections implements IItemTooltipSections {
 
     // 0x485fb1: SERVER_GetUnitStat reads the item's BASE stat 31 and any difference from
     // the merged value sets the flag the marker at 0x4860de depends on.
-    const marker = this.baseStat(StatArmorClass) !== armor ? ItemTooltipColor.Marker + '3' : '';
+    const modified = this.baseStat(StatArmorClass) !== armor;
+
+    // ITEMDESC_Defense 0x1401d1d00: the same bytes, by template.
+    if (this.resurrected) {
+      return (
+        this.markedTemplate(
+          SectionStringIds.ArmorClass,
+          modified ? ItemTooltipColor.Magic : -1,
+          armor,
+        ) + this.terminator
+      );
+    }
+
+    const marker = modified ? ItemTooltipColor.Marker + '3' : '';
 
     return (
       this.str(SectionStringIds.ArmorClass) + this.space + marker + String(armor) + this.terminator
@@ -736,6 +889,10 @@ export class RecordSections implements IItemTooltipSections {
 
     const min = this.items.getInt(this.item.classId, 'mindam') + extraMin;
     const max = this.items.getInt(this.item.classId, 'maxdam') + extraMax;
+
+    if (this.resurrected) {
+      return this.template(label, min, max) + this.terminator; // 0x1401d19e0, no marker
+    }
 
     return (
       this.str(label) +
@@ -811,6 +968,24 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
+    // ITEMDESC_Damage 0x1401d100c / 0x1401d1092: the elemental colour once, at the first number,
+    // and the one-number template when the ends agree.
+    if (this.resurrected) {
+      return (
+        ItemTooltipColor.Marker +
+        '0' +
+        (damage.min === damage.max
+          ? this.markedTemplate(SectionStringIds.ThrowDamage, damage.color, damage.min)
+          : this.markedTemplate(
+              SectionStringIds.ThrowDamageRange,
+              damage.color,
+              damage.min,
+              damage.max,
+            )) +
+        this.terminator
+      );
+    }
+
     const marker = ItemTooltipColor.Marker + String.fromCharCode(0x30 + damage.color);
 
     let text =
@@ -834,10 +1009,12 @@ export class RecordSections implements IItemTooltipSections {
    * consulted, and neither is anything about what else is equipped.
    */
   private barbarianDualWield(): boolean {
+    // D2R asks the CLIENT player (ITEMDESC_Damage 0x1401d0ea1), not the tooltip's unit.
+    const player = this.resurrected ? this.clientPlayer : this.viewer;
     return (
-      this.viewer !== null &&
-      this.viewer.isPlayer &&
-      this.viewer.classId === BarbarianClass &&
+      player !== null &&
+      player.isPlayer &&
+      player.classId === BarbarianClass &&
       this.items.getInt(this.item.classId, '1or2handed') !== 0
     );
   }
@@ -893,6 +1070,13 @@ export class RecordSections implements IItemTooltipSections {
   ): ItemDamageRange {
     const min = this.stat(minStat);
     let max = this.stat(maxStat);
+
+    // ITEMDESC_GetMinMaxStats 0x1401d0981-0x1401d0987: *pMax = MAX(min, max) on every line.
+    // `dmg-min` raises the throw minimum (stat 159) but no maximum (0x140287f46), so the throw line
+    // and the Barbarian pair, which have no min+1 clamp, can see min > max.
+    if (this.resurrected && max < min) {
+      max = min;
+    }
 
     // 0x485931, single-line path only.
     // The `min + 1` is itself int32: at int.MaxValue it wraps to int.MinValue, so the clamp does
@@ -1023,6 +1207,18 @@ export class RecordSections implements IItemTooltipSections {
     // on the marker staying in force from the min. Its flag is also pre-seeded at
     // 0x485a14-0x485a54 from STATLIST_GetStatBonusFromLists on stats 18, 17, 159 and 160,
     // where the 1H/2H flag is zeroed at 0x485662 and never gets those terms.
+    // ITEMDESC_Damage: ÿc0 on the throw label and ONE ÿc3 at the first number, only when modified
+    // (0x1401d15e1 / 0x1401d1608); the 1H/2H line is the same bytes as 1.14d.
+    if (this.resurrected) {
+      const color = values.modified ? ItemTooltipColor.Magic : -1;
+      return throwShape
+        ? ItemTooltipColor.Marker +
+            '0' +
+            this.markedTemplate(SectionStringIds.ThrowDamageRange, color, min, max) +
+            this.terminator
+        : this.markedTemplate(labelId, color, min, max) + this.terminator;
+    }
+
     if (throwShape) {
       const throwMarker = ItemTooltipColor.Marker + (values.modified ? '3' : '0');
 
@@ -1117,6 +1313,10 @@ export class RecordSections implements IItemTooltipSections {
 
     let total = this.stat(StatToBlock);
 
+    if (this.resurrected) {
+      return this.resurrectedBlockChance(total);
+    }
+
     if (
       this.viewer !== null &&
       this.viewer.isPlayer &&
@@ -1154,9 +1354,60 @@ export class RecordSections implements IItemTooltipSections {
     );
   }
 
+  /**
+   * ITEMDESC_Blockchance 0x1401d16a0. The CLIENT player supplies BlockFactor and Holy Shield with
+   * no unit-type test (0x1401d172d), the label lost its own ÿc0, and with no player the 75 cap is
+   * skipped (0x1401d1738 jumps straight to the zero test).
+   */
+  private resurrectedBlockChance(total: number): string | null {
+    const player = this.clientPlayer;
+    if (player !== null) {
+      if (
+        this.data.charStats !== null &&
+        player.classId >= 0 &&
+        player.classId < this.data.charStats.rowCount
+      ) {
+        total = (total + this.data.charStats.getInt(player.classId, 'BlockFactor')) | 0;
+      }
+
+      total =
+        (total +
+          (RecordSections.holyShieldUpFor(player)
+            ? this.skillDamage.paramWithDiminishing(
+                SkillDamage.HolyShieldSkillId,
+                player.skillLevel(SkillDamage.HolyShieldSkillId),
+              )
+            : 0)) |
+        0;
+
+      if (total > MaxBlockChance) {
+        total = MaxBlockChance;
+      }
+    }
+
+    if (total === 0) {
+      return null;
+    }
+
+    const color =
+      total > this.items.getInt(this.item.classId, 'block') ? ItemTooltipColor.Magic : -1;
+    return this.markedTemplate(SectionStringIds.BlockChance, color, total) + this.terminator;
+  }
+
+  private resurrectedClassRestriction(): string | null {
+    const classId = this.requirements.classRestriction(this.item);
+    return classId >= 0 && classId < ResurrectedClassOnlyIds.length
+      ? this.str(ResurrectedClassOnlyIds[classId] as number) + this.terminator
+      : null;
+  }
+
   // ItemTypes `Class` restricts the item to one character class; the text is that class's
   // charstats StrClassOnly.
   private classRestriction(): string | null {
+    if (this.resurrected) {
+      return this.resurrectedClassRestriction();
+    }
+
     const row = this.primaryType();
     if (row < 0 || this.data.itemTypes === null) {
       return null;
@@ -1184,7 +1435,130 @@ export class RecordSections implements IItemTooltipSections {
   // (INV_FormatQuantityText 0x484db0 builds similar text into a buffer LoadItemDesc overwrites
   // at 0x48e9a5, so its output is dead in 1.14d.)
   private quantityAndSpellDescription(): string | null {
+    if (this.resurrected) {
+      const buffer = this.resurrectedSpellDescription(this.quantityLine() ?? '');
+      return buffer.length === 0 ? null : buffer;
+    }
+
     return this.spellDescription() ?? this.quantityLine();
+  }
+
+  /** ITEMS_GetTotalMaxStack 0x14022b9a0: maxstack + item_extra_stack, capped. */
+  private totalMaxStack(): number {
+    const total =
+      (this.items.getInt(this.item.classId, 'maxstack') + this.stat(StatExtraStack)) | 0;
+    return total > MaxTotalStack ? MaxTotalStack : total;
+  }
+
+  /**
+   * ITEMDESC_StackableItemDescription 0x1401d2750: the HD "Quantity: %d of %d" takes the total max
+   * stack as its second number; the legacy "Quantity: %d" ignores it.
+   */
+  private resurrectedQuantity(): string | null {
+    const quantity = this.stat(StatQuantity);
+    const maxStack = this.totalMaxStack();
+    if (quantity <= 0 && maxStack <= 0) {
+      return null;
+    }
+
+    return this.template(SectionStringIds.QuantityLabel, quantity, maxStack) + this.terminator;
+  }
+
+  /**
+   * LANG_SpellDesc 0x1401d2ae0, run on the quantity buffer. Modes 1 and 3 REPLACE it, 2 and 4
+   * APPEND a formatted line, and a non-zero spelldesccolor then prepends a marker to the whole
+   * buffer (0x1401d2e0d). The inventory hover passes a5 = 3, so bit 1 is set and a quest item's
+   * mode-1 text shows (0x1401d2d56); no gamepad, so spelldescstr2 is never chosen.
+   */
+  private resurrectedSpellDescription(buffer: string): string {
+    const mode = this.items.getInt(this.item.classId, 'spelldesc');
+    const file = this.fileFor(this.item.classId);
+    const row = this.rowFor(this.item.classId);
+
+    if (mode === 0 || this.clientPlayer === null || file === null || row < 0) {
+      return buffer;
+    }
+
+    const stringId = TxtKeys.id(file, row, 'spelldescstr', this.data.strings);
+    if (stringId === NoSpellDescString) {
+      return buffer;
+    }
+
+    switch (mode) {
+      case 1:
+        buffer = this.str(stringId) + this.terminator;
+        break;
+
+      case 2:
+      case 4: {
+        let value = RecordSections.trySpellDescValue(file, row);
+        if (value === null) {
+          return buffer;
+        }
+
+        if (mode === 2) {
+          value = this.resurrectedPotionValue(this.clientPlayer, file, row, value);
+        }
+
+        buffer += this.template(stringId, value) + this.terminator;
+        break;
+      }
+
+      case 3: {
+        const value = RecordSections.trySpellDescValue(file, row);
+        if (value === null) {
+          return buffer;
+        }
+
+        buffer = this.str(stringId) + this.space + String(value) + this.terminator;
+        break;
+      }
+
+      default:
+        return buffer;
+    }
+
+    const color = file.getInt(row, 'spelldesccolor');
+    return color !== 0 && buffer.length !== 0
+      ? ItemTooltipColor.Marker + ItemTooltipComposer.encodeColorDigit(color) + buffer
+      : buffer;
+  }
+
+  /**
+   * ITEMS_GetBonusLifeBasedOnClass 0x14022ede0 / ITEMS_GetBonusManaBasedOnClass 0x14022eed0: the
+   * charstats HealthPotionPercent / ManaPotionPercent of the client player's class, replacing
+   * 1.14d's byte tables. A non-player gets life x2, mana x1.
+   */
+  private resurrectedPotionValue(
+    player: ItemViewer,
+    file: TxtFile,
+    row: number,
+    value: number,
+  ): number {
+    const stat = this.data.itemStatCost.statIdForName(file.getString(row, 'stat1').trim());
+    const healing = stat === StatHitPoints || stat === StatHpRegen;
+    const mana = stat === StatMana || stat === StatManaRecovery;
+    if (!healing && !mana) {
+      return value;
+    }
+
+    if (!player.isPlayer) {
+      return healing ? (value * 2) | 0 : value;
+    }
+
+    if (
+      this.data.charStats === null ||
+      player.classId < 0 ||
+      player.classId >= this.data.charStats.rowCount
+    ) {
+      return value;
+    }
+
+    const percent = this.data.charStats.getInt(
+      player.classId,
+      healing ? 'HealthPotionPercent' : 'ManaPotionPercent',
+    );
+    return Number(BigInt.asIntN(32, (BigInt(value) * BigInt(percent)) / 100n));
   }
 
   // 0x486160: a stackable item shows the line even at quantity 0, because the gate is
@@ -1195,6 +1569,10 @@ export class RecordSections implements IItemTooltipSections {
    * tome shows its count whatever its flags.
    */
   private bookQuantity(): string | null {
+    if (this.resurrected) {
+      return this.resurrectedQuantity();
+    }
+
     const quantity = this.stat(StatQuantity);
 
     if (quantity <= 0 && this.items.getInt(this.item.classId, 'maxstack') <= 0) {
@@ -1218,6 +1596,10 @@ export class RecordSections implements IItemTooltipSections {
     // The spelldesc that may replace its buffer (0x48e978) is reached either way.
     if (!this.item.has(ItemRecordFlags.Identified) || this.item.has(ItemRecordFlags.Socketed)) {
       return null;
+    }
+
+    if (this.resurrected) {
+      return this.resurrectedQuantity();
     }
 
     const quantity = this.stat(StatQuantity);
@@ -1352,10 +1734,14 @@ export class RecordSections implements IItemTooltipSections {
 
   // 0x485dd2 / 0x485dda: the skill must exist on the viewer AND unit state 101 must be up.
   private holyShieldUp(): boolean {
+    return RecordSections.holyShieldUpFor(this.viewer);
+  }
+
+  private static holyShieldUpFor(unit: ItemViewer | null): boolean {
     return (
-      this.viewer !== null &&
-      this.viewer.activeStates.has(SkillDamage.HolyShieldState) &&
-      this.viewer.skillLevel(SkillDamage.HolyShieldSkillId) > 0
+      unit !== null &&
+      unit.activeStates.has(SkillDamage.HolyShieldState) &&
+      unit.skillLevel(SkillDamage.HolyShieldSkillId) > 0
     );
   }
 
@@ -1491,7 +1877,10 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
-    return this.str(SectionStringIds.RunewordOpen) + letters + "'" + this.terminator;
+    // D2R loads RuneQuote at BOTH ends (0x1401d2f44 / 0x1401d3034); it is localised, and empty in
+    // frFR HD and zhTW legacy.
+    const close = this.resurrected ? this.str(SectionStringIds.RunewordOpen) : "'";
+    return this.str(SectionStringIds.RunewordOpen) + letters + close + this.terminator;
   }
 
   // ITEM_GetItemsTxt_bHasInv 0x629900 reads the items.txt "hasinv" column.
@@ -1505,6 +1894,12 @@ export class RecordSections implements IItemTooltipSections {
       return null;
     }
 
+    // ITEMS_GetWeaponAttackSpeed hard-exits on a null unit (0x14022f0fa), so D2R has no viewer-less
+    // speed word to reproduce; a viewer-less render omits the line.
+    if (this.resurrected && this.clientPlayer === null) {
+      return null;
+    }
+
     const speed = this.attackSpeed.tryCalculate(this.item, this.clientPlayer, this.stats);
     if (speed === null) {
       return null;
@@ -1512,6 +1907,16 @@ export class RecordSections implements IItemTooltipSections {
 
     // word_721E88 holds 4088..4093 at stride 6.
     const speedWord = SectionStringIds.FirstSpeedWord + this.speedBucket(speed);
+
+    // ITEMDESC_AttackSpeed_WeaponClass 0x1401d2a60: the class string is a template that takes the
+    // speed word, so `tpot`'s "Equip to Throw" (no %s) drops it entirely.
+    if (this.resurrected) {
+      const marked =
+        (this.bonus(StatFasterAttackRate) !== 0 ? ItemTooltipColor.Marker + '3' : '') +
+        this.str(speedWord);
+      const classString = this.weaponClassStringId();
+      return (classString < 0 ? marked : this.template(classString, marked)) + this.terminator;
+    }
 
     let text = '';
 
@@ -1680,19 +2085,70 @@ export class RecordSections implements IItemTooltipSections {
   }
 
   private gemLetter(classId: number): string | null {
-    return this.gemTable.letter(this.gemTable.rowForRuneClassId(classId));
+    const letter = this.gemTable.letter(this.gemTable.rowForRuneClassId(classId));
+
+    // ITEMDESC_InventorySocketFillerDescription 0x1401d2fad: the cell is a string KEY looked up at
+    // render time, and the raw cell, cut to five characters, is copied only when the result
+    // POINTER equals the one strMissingString's own lookup returns. A miss returns g_pStringTable,
+    // a copy (0x140477a5c) that no node shares, so a missing key prints the missing-string text;
+    // the raw cut needs the key itself, or both keys missing.
+    if (this.resurrected && !isNullOrEmpty(letter)) {
+      const key = letter as string;
+      const samePointer = this.data.strings.hasKey(key)
+        ? key === MISSING_STRING_KEY
+        : !this.data.strings.hasKey(MISSING_STRING_KEY);
+      return samePointer
+        ? key.length > 5
+          ? key.substring(0, 5)
+          : key
+        : this.data.strings.getByKey(key);
+    }
+
+    return letter;
+  }
+
+  /**
+   * D2R's belt-size line (ITEMS_GetFullDescription 0x1401d57f6): an item whose PRIMARY type is
+   * exactly `belt`, with items `belt` below 7, gets numboxes over the `default` belt (belts row 2),
+   * formatted "%+d" and skipped when zero. No identified gate.
+   */
+  private beltSize(): string | null {
+    const belts = this.data.belts;
+    if (!this.resurrected || belts === null || this.primaryType() !== this.types.row('belt')) {
+      return null;
+    }
+
+    const belt = this.items.getInt(this.item.classId, 'belt') & 0xff;
+    if (belt >= FirstBeltRows || belt >= belts.rowCount) {
+      return null;
+    }
+
+    const extra = (belts.getInt(belt, 'numboxes') - belts.getInt(DefaultBeltRow, 'numboxes')) | 0;
+    if (extra === 0) {
+      return null;
+    }
+
+    return (
+      CFormat.sprintf(this.data.strings.getByKey(SectionStringIds.BeltStorageKey), extra) +
+      this.terminator
+    );
   }
 
   private weaponClassName(): string | null {
+    const id = this.weaponClassStringId();
+    return id < 0 ? null : this.str(id);
+  }
+
+  private weaponClassStringId(): number {
     const type = this.primaryType();
 
     for (const entry of WeaponClassWords) {
       if (this.types.isOfType(type, this.secondaryType(), this.types.row(entry[0]))) {
-        return this.str(entry[1]);
+        return entry[1];
       }
     }
 
-    return null;
+    return -1;
   }
 
   // 0x48622f / 0x48623d bracket the table: 28 and over is bucket 5 outright, under 10 is
@@ -1710,7 +2166,9 @@ export class RecordSections implements IItemTooltipSections {
     const offset =
       classId < 0
         ? NoViewerSpeedOffset
-        : (ClassSpeedOffset[classId * 2 + (this.rangedWeapon() ? 1 : 0)] as number);
+        : ((this.resurrected ? ResurrectedClassSpeedOffset : ClassSpeedOffset)[
+            classId * 2 + (this.rangedWeapon() ? 1 : 0)
+          ] as number);
 
     const index = 5 * (speed - 10) + offset;
 
@@ -1735,7 +2193,7 @@ export class RecordSections implements IItemTooltipSections {
     // whoever the tooltip is for.
     const classId =
       this.clientPlayer !== null && this.clientPlayer.isPlayer ? this.clientPlayer.classId : -1;
-    return classId >= 0 && classId <= 6 ? classId : -1;
+    return classId >= 0 && classId <= (this.resurrected ? 7 : 6) ? classId : -1;
   }
 
   private fileFor(classId: number): TxtFile | null {

@@ -17,6 +17,14 @@ namespace D2ItemToolkit
         private static readonly Lazy<TooltipEngine> EmbeddedInstance =
             new Lazy<TooltipEngine>(() => new TooltipEngine(D2DataFiles.LoadEmbedded()));
 
+        private static readonly Lazy<TooltipEngine> EmbeddedReignOfTheWarlockInstance =
+            new Lazy<TooltipEngine>(() => new TooltipEngine(
+                D2DataFiles.LoadEmbedded(GameVariant.ReignOfTheWarlock)));
+
+        private static readonly Lazy<TooltipEngine> EmbeddedResurrectedInstance =
+            new Lazy<TooltipEngine>(() => new TooltipEngine(
+                D2DataFiles.LoadEmbedded(GameVariant.Resurrected)));
+
         private readonly D2DataFiles _data;
         private readonly ItemTable _items;
         private readonly ItemTypeTree _types;
@@ -38,6 +46,11 @@ namespace D2ItemToolkit
             _items = new ItemTable(data.Weapons, data.Armor, data.Misc);
             _types = new ItemTypeTree(data.ItemTypes);
             _sets = new SetTable(data.Sets, data.SetItems, data.Strings);
+
+            // Here as well as in SetItemTooltipBuilder, or Ranges' set-bonus fold depended on
+            // whether a set item had been rendered first.
+            _sets.ResolvePropertyCodesWith(
+                new PropertiesTable(data.Properties, data.ItemStatCost).RowForCode);
             _colors = new ItemInventoryColor(data, _items, _types);
             _graphics = new ItemInventoryGraphics(data, _items, _types);
             _requirements = new EquipRequirements(data, _items);
@@ -51,6 +64,43 @@ namespace D2ItemToolkit
         public static TooltipEngine Embedded
         {
             get { return EmbeddedInstance.Value; }
+        }
+
+        /// <summary>
+        /// The embedded tables for <paramref name="variant"/>, built once and reused. The D2R
+        /// variants use HD English strings; pass <see cref="ResurrectedTextOptions"/> to
+        /// <see cref="ForVariant(GameVariant, ResurrectedTextOptions)"/> for another set.
+        /// </summary>
+        public static TooltipEngine ForVariant(GameVariant variant)
+        {
+            switch (variant)
+            {
+                case GameVariant.Lod114d:
+                    return EmbeddedInstance.Value;
+                case GameVariant.ReignOfTheWarlock:
+                    return EmbeddedReignOfTheWarlockInstance.Value;
+                case GameVariant.Resurrected:
+                    return EmbeddedResurrectedInstance.Value;
+                default:
+                    throw new ArgumentOutOfRangeException("variant");
+            }
+        }
+
+        /// <summary>A NEW engine over the embedded tables — not cached, so keep it.</summary>
+        public static TooltipEngine ForVariant(GameVariant variant, ResurrectedTextOptions options)
+        {
+            if (options == null || variant == GameVariant.Lod114d)
+            {
+                return ForVariant(variant);
+            }
+
+            return new TooltipEngine(D2DataFiles.LoadEmbedded(variant, options));
+        }
+
+        /// <summary>Which game this engine renders for.</summary>
+        public GameVariant Variant
+        {
+            get { return _data.Variant; }
         }
 
         /// <summary>
@@ -136,7 +186,7 @@ namespace D2ItemToolkit
             // as it is built rather than patched onto the finished list.
             if (opts.Ranges != null)
             {
-                InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
+                InstallRangeAnnotations(composed.Composer, item, viewer, opts, includeSockets);
             }
 
             composed.Composer.ItemLevelSuffix = ItemLevelSuffixOf(item, opts);
@@ -163,7 +213,8 @@ namespace D2ItemToolkit
             }
 
             return new Tooltip(
-                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context));
+                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context),
+                composed.Context.IsResurrected);
         }
 
         /// <summary>
@@ -241,11 +292,12 @@ namespace D2ItemToolkit
                 if (options.Ranges != null)
                 {
                     // A jewel's spans come from ITS OWN affixes, so it is ranged as the item it is.
-                    // A gem or rune is ranged from the gems.txt properties it lends the host —
-                    // which in shipped data never roll, so those blocks come out unannotated.
-                    composer.RangeAnnotation = carriesOwnStats
-                        ? BuildRangeAnnotation(filler, options)
-                        : BuildFillerRangeAnnotation(item, filler, slot, options);
+                    // A gem or rune is ranged from the gems.txt properties it lends the host, even
+                    // when a server capture carried its list — which in shipped data never roll,
+                    // so those blocks come out unannotated.
+                    composer.RangeAnnotation = RangedFromGemsTxt(filler)
+                        ? BuildFillerRangeAnnotation(item, filler, slot, options)
+                        : BuildRangeAnnotation(filler, options);
                     composer.RangeColor = options.Ranges.Color;
                 }
 
@@ -276,12 +328,11 @@ namespace D2ItemToolkit
             {
                 foreach (IUnit filler in host.Items)
                 {
-                    properties.AddRange(_socketStats.FillerProperties(filler, slot));
-
                     // A jewel contributes nothing through gems.txt; its own affixes are the roll,
                     // so its reconstruction is merged in rather than skipped.
-                    if (_socketStats.Contribution(filler, slot).Count != 0)
+                    if (RangedFromGemsTxt(filler))
                     {
+                        properties.AddRange(_socketStats.GemsTxtProperties(filler, slot));
                         continue;
                     }
 
@@ -313,7 +364,7 @@ namespace D2ItemToolkit
             ItemRollRanges ranges = _ranges.Reconstruct(
                 ItemRecordReader.ReadIdentity(host),
                 null,
-                _socketStats.FillerProperties(filler, slot),
+                _socketStats.GemsTxtProperties(filler, slot),
                 null,
                 false);
 
@@ -426,17 +477,24 @@ namespace D2ItemToolkit
             IUnit item,
             TooltipOptions options,
             bool includeSockets = true,
-            bool includeBaseDefense = true)
+            bool includeBaseDefense = true,
+            IUnit viewer = null)
         {
+            Func<int, int> viewerStat = includeBaseDefense ? LevelScalingStat(viewer) : null;
+
             ItemRollRanges ranges = includeSockets && includeBaseDefense
-                ? Ranges(item)
+                ? RangesWith(item, null, viewerStat)
                 : _ranges.Reconstruct(
                     ItemRecordReader.ReadIdentity(item),
-                    ItemStatReader.ReconstructView(item, ItemOwnMods()),
+                    includeSockets
+                        ? ModifiersWithFillers(item)
+                        : ItemStatReader.ReconstructView(item, ItemOwnMods()),
                     includeSockets ? AllSocketProperties(item) : null,
                     null,
                     true,
-                    includeBaseDefense);
+                    includeBaseDefense,
+                    EarnedTierStates(item),
+                    viewerStat);
 
             return Lookup(ByKey(ranges), options);
         }
@@ -456,13 +514,53 @@ namespace D2ItemToolkit
         }
 
         private void InstallRangeAnnotations(
-            ItemTooltipComposer composer, IUnit item, TooltipOptions options, bool includeSockets)
+            ItemTooltipComposer composer,
+            IUnit item,
+            IUnit viewer,
+            TooltipOptions options,
+            bool includeSockets)
         {
             composer.RangeAnnotation =
                 BuildRangeAnnotation(item, options, includeSockets, includeBaseDefense: false);
             composer.SectionRangeAnnotation =
-                BuildRangeAnnotation(item, options, includeSockets);
+                BuildRangeAnnotation(item, options, includeSockets, viewer: viewer);
             composer.RangeColor = options.Ranges.Color;
+        }
+
+        /// <summary>
+        /// The unit D2R's Defense line attaches the item to, which re-runs ops 4/5 against it
+        /// (0x14020c57d) — only a player or monster. The same gate as <see cref="Compose"/>.
+        /// </summary>
+        private Func<int, int> LevelScalingStat(IUnit viewer)
+        {
+            if (!_data.IsResurrected || viewer == null)
+            {
+                return null;
+            }
+
+            ItemViewer player = ItemRecordReader.ReadViewer(viewer);
+            return player.UnitType == 0 || player.UnitType == 1 ? player.Stat : (Func<int, int>)null;
+        }
+
+        /// <summary>
+        /// The set-tier lists that count toward the item's stats: states 165..169 still MAGIC but no
+        /// longer STATLIST_SET, which ITEMS_RecalculateSetItemSpecificMods 0x14028ab90 clears once
+        /// the tier is earned.
+        /// </summary>
+        private static HashSet<int> EarnedTierStates(IUnit item)
+        {
+            var earned = new HashSet<int>();
+            foreach (IUnitStatList list in item.StatsLists)
+            {
+                if (list.StateNo >= 165 && list.StateNo <= 169
+                    && (list.Flags & ItemStatListFlags.Magic) != 0
+                    && (list.Flags & ItemStatListFlags.Set) == 0)
+                {
+                    earned.Add(list.StateNo);
+                }
+            }
+
+            return earned;
         }
 
         /// <summary>
@@ -513,7 +611,10 @@ namespace D2ItemToolkit
                     continue;
                 }
 
-                owned.Add(carried.Unit.FileIndex);
+                if (carried.Owned)
+                {
+                    owned.Add(carried.Unit.FileIndex);
+                }
 
                 if (carried.Worn)
                 {
@@ -553,15 +654,22 @@ namespace D2ItemToolkit
         /// </summary>
         private sealed class CarriedSetPiece
         {
-            public CarriedSetPiece(IUnit unit, SetItemRecord piece, bool worn)
+            public CarriedSetPiece(IUnit unit, SetItemRecord piece, bool owned, bool worn)
             {
                 Unit = unit;
                 Piece = piece;
+                Owned = owned;
                 Worn = worn;
             }
 
             public readonly IUnit Unit;
             public readonly SetItemRecord Piece;
+
+            /// <summary>
+            /// What GetSetItem finds. In D2R a worn piece is yielded unidentified, for its mask bit
+            /// alone, and this is then false.
+            /// </summary>
+            public readonly bool Owned;
 
             /// <summary>
             /// Grid type 3, which is what the worn mask requires (0x62a3f0). Everything yielded here
@@ -598,9 +706,17 @@ namespace D2ItemToolkit
                 // GetSetItem 0x486770 takes quality 5 (0x486790) that is IDENTIFIED
                 // (CheckItemFlag 0x10, 0x4867a2). Every set item drops unidentified, so a sibling
                 // just picked up is the normal case and the game paints it red.
-                if (carried == null
-                    || carried.Quality != (int)ItemQuality.Set
-                    || !IsOwned(carried))
+                if (carried == null || carried.Quality != (int)ItemQuality.Set)
+                {
+                    continue;
+                }
+
+                // D2R's mask, ITEMS_GetSetItemsMask 0x14022eb70, has no identified test
+                // (0x14022ec4e-0x14022ec75), so an unidentified worn sibling still lights its bit
+                // while only the piece list's ownership walk (0x1401d3889) refuses it.
+                bool owned = IsOwned(carried);
+                bool worn = IsWorn(carried) && (owned || Data.IsResurrected);
+                if (!owned && !worn)
                 {
                     continue;
                 }
@@ -613,7 +729,7 @@ namespace D2ItemToolkit
 
                 // The mask additionally refuses flag 0x100 and flag 0x4000 (0x62a446) — a broken
                 // piece grants no bonus even while worn, and it is already drawn red by name.
-                yield return new CarriedSetPiece(carried, piece, IsWorn(carried));
+                yield return new CarriedSetPiece(carried, piece, owned, worn);
             }
         }
 
@@ -681,7 +797,7 @@ namespace D2ItemToolkit
 
             if (opts.Ranges != null)
             {
-                InstallRangeAnnotations(composed.Composer, item, opts, includeSockets);
+                InstallRangeAnnotations(composed.Composer, item, viewer, opts, includeSockets);
             }
 
             composed.Composer.ItemLevelSuffix = ItemLevelSuffixOf(item, opts);
@@ -695,7 +811,8 @@ namespace D2ItemToolkit
             }
 
             return new Tooltip(
-                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context));
+                composed.Kind, lines, composed.Composer, QuestColorOf(composed.Context),
+                composed.Context.IsResurrected);
         }
 
         /// <summary>
@@ -767,8 +884,8 @@ namespace D2ItemToolkit
             List<ItemUnit> socketUnits = ItemRecordReader.ReadSocketUnits(item);
 
             return new ItemRequirements(
-                _requirements.Requirement(identity, "reqstr", stats),
-                _requirements.Requirement(identity, "reqdex", stats),
+                _requirements.Requirement(identity, "reqstr", stats, player),
+                _requirements.Requirement(identity, "reqdex", stats, player),
                 _level.Calculate(identity, player, stats, socketUnits, sockets),
                 _requirements.ClassRestriction(identity),
                 _requirements.MetStrength(identity, player, stats),
@@ -1004,13 +1121,23 @@ namespace D2ItemToolkit
         {
             if (item == null) throw new ArgumentNullException("item");
 
+            return RangesWith(item, earnedSetIds, null);
+        }
+
+        private ItemRollRanges RangesWith(
+            IUnit item, IEnumerable<int> earnedSetIds, Func<int, int> viewerStat)
+        {
             // Not equipped, matching Breakdown's socket view: an equipped host's fillers are
             // discarded by recalc, which would drop the very properties being ranged.
             return _ranges.Reconstruct(
                 ItemRecordReader.ReadIdentity(item),
-                RecordedForComparison(item),
+                RecordedForComparison(item, viewerStat),
                 AllSocketProperties(item),
-                earnedSetIds);
+                earnedSetIds,
+                true,
+                true,
+                EarnedTierStates(item),
+                viewerStat);
         }
 
         /// <summary>
@@ -1026,19 +1153,22 @@ namespace D2ItemToolkit
         /// it exists to give.
         ///
         /// The total is the op-resolved equipped value — the number the Defense line draws — because
-        /// the span is op-resolved too.
+        /// the span is op-resolved too. Both halves count the socket fillers, as the span does.
         /// </summary>
-        private SortedDictionary<int, int> RecordedForComparison(IUnit item)
+        private SortedDictionary<int, int> RecordedForComparison(IUnit item, Func<int, int> viewerStat)
         {
-            SortedDictionary<int, int> recorded =
-                ItemStatReader.ReconstructView(item, ItemOwnMods());
+            SortedDictionary<int, int> recorded = ModifiersWithFillers(item);
 
             SortedDictionary<int, int> equipped =
                 ItemStatReader.ReconstructView(item, ItemStatView.Equipped());
+            AddInto(equipped, _socketStats.Contributions(item));
             SortedDictionary<int, int> baseStats =
                 ItemStatReader.ReconstructView(item, ItemStatView.BaseOnly());
 
+            var preOp = new Dictionary<int, int>(equipped);
             ItemStatOps.Resolve(equipped, baseStats, _data.ItemStatCost);
+            ItemStatOps.ResolveLevelScaled(
+                equipped, preOp, _data.ItemStatCost.LevelScaledEntries, viewerStat);
 
             int key = ItemStatReader.PackStatKey(0, StatDefense);
 
@@ -1060,12 +1190,14 @@ namespace D2ItemToolkit
         ///
         /// A set counts as earned once two of its pieces are worn, which is the point `add func`
         /// 2 lights its first tier (0x4e65b2 gives N worn pieces tiers 0..N-2).
+        ///
+        /// In D2R the Defense span also counts the viewer's ops 4/5, as the Defense line does.
         /// </summary>
         public ItemRollRanges RangesForViewer(IUnit item, IUnit viewer)
         {
             if (item == null) throw new ArgumentNullException("item");
 
-            return Ranges(item, EarnedSetIdsOf(viewer));
+            return RangesWith(item, EarnedSetIdsOf(viewer), LevelScalingStat(viewer));
         }
 
         /// <summary>
@@ -1121,7 +1253,7 @@ namespace D2ItemToolkit
         /// </summary>
         private List<ItemProperty> AllSocketProperties(IUnit item)
         {
-            var properties = new List<ItemProperty>(_socketStats.FillerProperties(item));
+            var properties = new List<ItemProperty>();
 
             int slot = _socketStats.SlotFor(item);
             if (slot < 0)
@@ -1131,10 +1263,12 @@ namespace D2ItemToolkit
 
             foreach (IUnit filler in item.Items)
             {
-                // A filler the synthesis has nothing to say about is one carrying its own stats,
-                // and its affixes are the roll.
-                if (_socketStats.Contribution(filler, slot).Count != 0)
+                // A gem or rune rolls from gems.txt even when a server capture hands over the list
+                // ITEMS_ApplyGemOrRuneAndRefreshSets assigned to it (0x1400a6772); anything else is
+                // a jewel, whose affixes are the roll.
+                if (RangedFromGemsTxt(filler))
                 {
+                    properties.AddRange(_socketStats.GemsTxtProperties(filler, slot));
                     continue;
                 }
 
@@ -1143,6 +1277,31 @@ namespace D2ItemToolkit
             }
 
             return properties;
+        }
+
+        /// <summary>
+        /// Whether a filler's spans come from gems.txt rather than from its own affixes. D2R: any gem
+        /// or rune, since a server capture carries the list ITEMS_ApplyGemOrRuneAndRefreshSets
+        /// assigned to the filler (0x1400a6772) yet rolled it from gems.txt. 1.14d keeps the
+        /// uncaptured-only rule, so its output does not move with this D2R fix.
+        /// </summary>
+        private bool RangedFromGemsTxt(IUnit filler)
+        {
+            return _data.IsResurrected
+                ? _socketStats.IsGemOrRune(filler)
+                : _socketStats.IsUncapturedGemOrRune(filler);
+        }
+
+        /// <summary>
+        /// The item's modifiers with every filler's: the captured lists, plus the gems.txt synthesis
+        /// for a gem or rune that arrived without one.
+        /// </summary>
+        private SortedDictionary<int, int> ModifiersWithFillers(IUnit item)
+        {
+            SortedDictionary<int, int> modifiers =
+                ItemStatReader.ReconstructView(item, ItemStatView.Modifiers());
+            AddInto(modifiers, _socketStats.Contributions(item));
+            return modifiers;
         }
 
         /// <summary>
@@ -1229,7 +1388,8 @@ namespace D2ItemToolkit
         /// </summary>
         private static bool QuestColorOf(ItemTooltipContext context)
         {
-            return context.IsQuestItem && !context.IsWirtsLeg;
+            // D2R has no such marker: ITEMS_GetFullDescription ends with the name (0x1401d6538).
+            return !context.IsResurrected && context.IsQuestItem && !context.IsWirtsLeg;
         }
 
         private Composed Compose(
@@ -1261,7 +1421,16 @@ namespace D2ItemToolkit
 
             // The capture is leaf-per-list, so op 13 is folded back in here rather than by the
             // producer. Without it every by-time stat reads its unresolved value.
+            var preOp = new Dictionary<int, int>(stats);
             ItemStatOps.Resolve(stats, baseStats, _data.ItemStatCost);
+
+            // D2R reads Defense and damage with the item attached to the viewer, which re-runs ops
+            // 4/5 against it — only a player or monster (0x14020c589-0x14020c593).
+            if (_data.IsResurrected && player != null && (player.UnitType == 0 || player.UnitType == 1))
+            {
+                ItemStatOps.ResolveLevelScaled(
+                    stats, preOp, _data.ItemStatCost.LevelScaledEntries, player.Stat);
+            }
 
             var sections = new RecordSections(
                 _data, _items, _types, identity, player, stats,
@@ -1280,7 +1449,8 @@ namespace D2ItemToolkit
             var composed = new Composed();
             composed.Sections = sections;
             composed.Composer = composer;
-            composed.Context = sections.CreateContext(options.Difficulty);
+            composed.Context = sections.CreateContext(
+                options.Difficulty, options.DesecratedZonesEnabled);
             composed.Context.ShopMode = options.ShopMode;
             composed.Kind = ItemTooltipComposer.Classify(composed.Context);
             composed.ModifierStats = modifierStats;
@@ -1321,7 +1491,11 @@ namespace D2ItemToolkit
         /// </summary>
         public int Level { get; private set; }
 
-        /// <summary>The character class id an item type is restricted to, or <see cref="EquipRequirements.NoClassRestriction"/>.</summary>
+        /// <summary>
+        /// The character class id an item type is restricted to, or the variant's "none" value:
+        /// <see cref="EquipRequirements.NoClassRestriction"/> (7) for 1.14d,
+        /// <see cref="EquipRequirements.ResurrectedNoClassRestriction"/> (8) for D2R, where 7 is the Warlock.
+        /// </summary>
         public int ClassRestriction { get; private set; }
 
         public bool MetStrength { get; private set; }
@@ -1437,6 +1611,13 @@ namespace D2ItemToolkit
         public int Difficulty;
 
         /// <summary>
+        /// Diablo II: Resurrected only: whether the game has desecrated (terror) zones enabled. The
+        /// Worldstone Shards' UsageConditionCalc reads it with <see cref="Difficulty"/>, and a
+        /// failed condition reddens the name.
+        /// </summary>
+        public bool DesecratedZonesEnabled;
+
+        /// <summary>
         /// 0 outside a shop. 1-9 add the transaction-cost line, and any non-zero value suppresses
         /// both usage lines (0x48d082 tests for exactly zero).
         /// </summary>
@@ -1485,13 +1666,16 @@ namespace D2ItemToolkit
     {
         private readonly ItemTooltipComposer _composer;
         private readonly bool _questColorPrefix;
+        private readonly bool _resurrected;
 
         internal Tooltip(
             ItemTooltipKind kind,
             IReadOnlyList<ItemTooltipLine> lines,
             ItemTooltipComposer composer,
-            bool questColorPrefix)
+            bool questColorPrefix,
+            bool resurrected = false)
         {
+            _resurrected = resurrected;
             Kind = kind;
             Lines = lines;
             _composer = composer;
@@ -1525,7 +1709,9 @@ namespace D2ItemToolkit
         {
             get
             {
-                return Kind == ItemTooltipKind.IdentifiedSetItem
+                // D2R grows the result as a D2RString and never cuts it (0x1401d654c); its only
+                // limits are per section buffer.
+                return Kind == ItemTooltipKind.IdentifiedSetItem || _resurrected
                     ? ItemTooltipComposer.UnlimitedTooltipLength
                     : ItemTooltipComposer.MaxTooltipLength;
             }
