@@ -1309,12 +1309,15 @@ export class ItemTooltipComposer {
 
     let text = addition;
     if (color >= 0 && color !== lineColor) {
+      // The marker's colour is one CHARACTER, '0' + index — not the index in decimal, which only
+      // agrees below 10. D2R's rune name colour is 26 ('J'), and its decimal "26" restored colour 2
+      // and printed a stray '6' after the item level.
       text =
         ItemTooltipColor.Marker +
-        String(color) +
+        String.fromCharCode(0x30 + color) +
         text +
         ItemTooltipColor.Marker +
-        String(lineColor);
+        String.fromCharCode(0x30 + lineColor);
     }
 
     const terminator = this.sections.lineTerminator ?? '';

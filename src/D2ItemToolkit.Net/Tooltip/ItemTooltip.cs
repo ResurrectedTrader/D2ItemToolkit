@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Text;
 
 namespace D2ItemToolkit
@@ -1324,9 +1323,12 @@ namespace D2ItemToolkit
 
             if (color >= 0 && color != lineColor)
             {
-                addition = ItemTooltipColor.Marker + color.ToString(CultureInfo.InvariantCulture)
+                // The marker's colour is one CHARACTER, '0' + index — not the index in decimal, which
+                // only agrees below 10. D2R's rune name colour is 26 ('J'), and its decimal "26"
+                // restored colour 2 and printed a stray '6' after the item level.
+                addition = ItemTooltipColor.Marker + (char)('0' + color)
                     + addition
-                    + ItemTooltipColor.Marker + lineColor.ToString(CultureInfo.InvariantCulture);
+                    + ItemTooltipColor.Marker + (char)('0' + lineColor);
             }
 
             string terminator = _sections.LineTerminator;
