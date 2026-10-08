@@ -1284,11 +1284,15 @@ export class ItemTooltipComposer {
         ? part.slice(0, part.length - terminator.length)
         : part;
 
+    // Always marked, even when the line's colour already is the grey: a name part can carry its own
+    // marker that `lineColor` does not see — a runeword's gold name sits on a line declared grey —
+    // and the suffix would otherwise inherit whatever colour the text before it left running.
     return this.appendInsideTerminator(
       part,
       body.endsWith(' ') ? this.itemLevelSuffix : ' ' + this.itemLevelSuffix,
       lineColor,
       ItemTooltipColor.SocketedOrEthereal,
+      true,
     );
   }
 
@@ -1302,13 +1306,15 @@ export class ItemTooltipComposer {
     addition: string | null,
     lineColor: number,
     color: number,
+    /** Mark the addition even when `color` equals `lineColor`, for a part with markers of its own. */
+    always = false,
   ): string {
     if (addition === null || addition.length === 0) {
       return part;
     }
 
     let text = addition;
-    if (color >= 0 && color !== lineColor) {
+    if (color >= 0 && (always || color !== lineColor)) {
       // The marker's colour is one CHARACTER, '0' + index — not the index in decimal, which only
       // agrees below 10. D2R's rune name colour is 26 ('J'), and its decimal "26" restored colour 2
       // and printed a stray '6' after the item level.

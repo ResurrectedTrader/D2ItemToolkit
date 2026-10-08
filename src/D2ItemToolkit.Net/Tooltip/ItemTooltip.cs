@@ -1301,11 +1301,15 @@ namespace D2ItemToolkit
                 ? part.Substring(0, part.Length - terminator.Length)
                 : part).EndsWith(" ", StringComparison.Ordinal);
 
+            // Always marked, even when the line's colour already is the grey: a name part can carry
+            // its own marker that lineColor does not see — a runeword's gold name sits on a line
+            // declared grey — and the suffix would otherwise inherit the colour left running.
             return AppendInsideTerminator(
                 part,
                 padded ? ItemLevelSuffix : " " + ItemLevelSuffix,
                 lineColor,
-                ItemTooltipColor.SocketedOrEthereal);
+                ItemTooltipColor.SocketedOrEthereal,
+                always: true);
         }
 
         /// <summary>
@@ -1313,15 +1317,19 @@ namespace D2ItemToolkit
         /// part it belongs to and appending after it would push the text onto the following line.
         /// A marker restoring <paramref name="lineColor"/> follows, so nothing after is affected.
         /// </summary>
+        /// <param name="always">
+        /// Mark the addition even when <paramref name="color"/> equals <paramref name="lineColor"/>,
+        /// for a part that carries markers of its own.
+        /// </param>
         private string AppendInsideTerminator(
-            string part, string addition, int lineColor, int color)
+            string part, string addition, int lineColor, int color, bool always = false)
         {
             if (string.IsNullOrEmpty(addition))
             {
                 return part;
             }
 
-            if (color >= 0 && color != lineColor)
+            if (color >= 0 && (always || color != lineColor))
             {
                 // The marker's colour is one CHARACTER, '0' + index — not the index in decimal, which
                 // only agrees below 10. D2R's rune name colour is 26 ('J'), and its decimal "26"
