@@ -1317,6 +1317,10 @@ namespace D2ItemToolkit
         /// part it belongs to and appending after it would push the text onto the following line.
         /// A marker restoring <paramref name="lineColor"/> follows, so nothing after is affected.
         /// </summary>
+        /// <param name="part">The line part to append to, terminator included.</param>
+        /// <param name="addition">The text to append; null or empty leaves the part unchanged.</param>
+        /// <param name="lineColor">The colour the line is drawn in, restored after the addition.</param>
+        /// <param name="color">The addition's colour, or a negative value to leave it unmarked.</param>
         /// <param name="always">
         /// Mark the addition even when <paramref name="color"/> equals <paramref name="lineColor"/>,
         /// for a part that carries markers of its own.
