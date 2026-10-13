@@ -299,6 +299,38 @@ describe('requirements, tier and the type tree', () => {
     expect(TooltipEngine.embedded.render(item(), player()).text).toContain('Required Level: 24');
   });
 
+  it('lowers strength and dexterity by a socketed rune as the tooltip prints them', () => {
+    // A captured Hel has no stat chain of its own; its weapon `ease -20` exists only as the
+    // gems.txt synthesis that render folds into the host. Phase Blade's 25 / 136 must read
+    // 20 / 109 in the structured answer exactly as on the drawn lines.
+    const engine = TooltipEngine.embedded;
+
+    const blade = unitFromJson(
+      `{ "unitType": 4, "classId": ${String(engine.items.classIdForCode('7cr'))},
+         "quality": 2, "itemFlags": ${String(16 | 0x800)},
+         "statsLists": [ { "stateNo": 0, "flags": 2147483648,
+           "stats": [ { "id": 194, "value": 1 } ] } ],
+         "items": [ { "unitType": 4, "classId": ${String(engine.items.classIdForCode('r15'))},
+           "itemFlags": 16 } ] }`,
+    );
+
+    const viewer = unitFromJson(
+      `{ "unitType": 0, "classId": 3, "stats": [ { "id": 0, "value": 60 },
+         { "id": 2, "value": 120 }, { "id": 12, "value": 60 } ] }`,
+    );
+
+    const requirements = engine.requirements(blade, viewer);
+    const text = engine.render(blade, viewer).text;
+
+    expect(text).toContain('Required Strength: 20');
+    expect(text).toContain('Required Dexterity: 109');
+    expect(requirements.strength).toBe(20);
+    expect(requirements.dexterity).toBe(109);
+
+    // 120 dexterity meets 109 but not the unsocketed 136.
+    expect(requirements.metDexterity).toBe(true);
+  });
+
   it('reports the item type class restriction, or none', () => {
     const engine = TooltipEngine.embedded;
 

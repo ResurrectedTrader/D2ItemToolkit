@@ -1040,7 +1040,12 @@ export class TooltipEngine {
     const identity = ItemRecordReader.readIdentity(item);
     const player = viewer === null ? null : ItemRecordReader.readViewer(viewer);
 
-    const stats = ItemStatReader.reconstructView(item, ItemStatView.equipped());
+    // The same fold compose gives the drawn requirement lines: a captured gem or rune has no chain
+    // of its own, so Hel's `ease` exists only as its gems.txt synthesis.
+    const stats = addInto(
+      ItemStatReader.reconstructView(item, ItemStatView.equipped()),
+      this.socketStats.contributions(item),
+    );
     const baseStats = ItemStatReader.reconstructView(item, ItemStatView.baseOnly());
     ItemStatOps.resolve(stats, baseStats, this.data.itemStatCost);
 

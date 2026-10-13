@@ -783,6 +783,38 @@ namespace D2ItemToolkit.Tests
         }
 
         [Fact]
+        public void A_socketed_rune_lowers_the_requirements_as_the_tooltip_prints_them()
+        {
+            // A captured Hel has no stat chain of its own; its weapon `ease -20` exists only as
+            // the gems.txt synthesis that Render folds into the host. Phase Blade's 25 / 136 must
+            // read 20 / 109 in the structured answer exactly as on the drawn lines.
+            TooltipEngine engine = TooltipEngine.Embedded;
+
+            Unit blade = Unit.FromJson(
+                @"{ ""unitType"": 4, ""classId"": " + engine.Items.ClassIdForCode("7cr")
+                + @", ""quality"": 2, ""itemFlags"": " + (16 | 0x800) + @",
+                  ""statsLists"": [ { ""stateNo"": 0, ""flags"": 2147483648,
+                    ""stats"": [ { ""id"": 194, ""value"": 1 } ] } ],
+                  ""items"": [ { ""unitType"": 4, ""classId"": " + engine.Items.ClassIdForCode("r15")
+                + @", ""itemFlags"": 16 } ] }");
+
+            Unit viewer = Unit.FromJson(
+                @"{ ""unitType"": 0, ""classId"": 3, ""stats"": [ { ""id"": 0, ""value"": 60 },
+                    { ""id"": 2, ""value"": 120 }, { ""id"": 12, ""value"": 60 } ] }");
+
+            ItemRequirements requirements = engine.Requirements(blade, viewer);
+            string text = engine.Render(blade, viewer).Text;
+
+            Assert.Contains("Required Strength: 20", text);
+            Assert.Contains("Required Dexterity: 109", text);
+            Assert.Equal(20, requirements.Strength);
+            Assert.Equal(109, requirements.Dexterity);
+
+            // 120 dexterity meets 109 but not the unsocketed 136.
+            Assert.True(requirements.MetDexterity);
+        }
+
+        [Fact]
         public void An_item_carries_no_merged_stats()
         {
             // `stats` at the top level is a WEARER field. On an item the same key appears only

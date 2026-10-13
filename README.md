@@ -670,6 +670,10 @@ item is class-restricted. Pass a viewer if you care about the flags.
 
 (That is only the API. The rendered tooltip does not paint anything red without a viewer.)
 
+The numbers are the ones the tooltip draws, socket fillers included: a gem or rune with no stat
+chain of its own is synthesised from gems.txt here exactly as for `Render`, so a Hel lowers the
+strength and dexterity it reports.
+
 ### Finding items by type
 
 ```csharp

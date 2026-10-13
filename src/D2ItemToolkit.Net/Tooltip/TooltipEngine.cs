@@ -876,6 +876,11 @@ namespace D2ItemToolkit
 
             SortedDictionary<int, int> stats =
                 ItemStatReader.ReconstructView(item, ItemStatView.Equipped());
+
+            // The same fold Compose gives the drawn requirement lines: a captured gem or rune has
+            // no chain of its own, so Hel's `ease` exists only as its gems.txt synthesis.
+            AddInto(stats, _socketStats.Contributions(item));
+
             SortedDictionary<int, int> baseStats =
                 ItemStatReader.ReconstructView(item, ItemStatView.BaseOnly());
             ItemStatOps.Resolve(stats, baseStats, _data.ItemStatCost);
